@@ -272,3 +272,123 @@
               (is (<= (get h "context-relations-deps-hop/hop") 10)))))
         (finally
           (.stop ^Server (:jetty http)))))))
+
+;; ---------------------------------------------------------------------------
+;; Multi-peer tests: two peer servers with a shared IPFS node but separate
+;; user namespaces. Each peer knows about the other via registry lookup,
+;; so batch computation can fetch context-deps across peer boundaries.
+
+(deftest test-two-peer-cross-fetch
+  (with-ipfs [ipfs-client]
+    ;; Both peers share the same IPFS node (offline daemon) — in production
+    ;; each would have its own, but IPFS content addressing means CIDs are
+    ;; globally addressable.
+    (let [reg-a  (registry/new-registry)
+          reg-b  (registry/new-registry)
+          srv-a  (new-peer-server ipfs-client reg-a)
+          srv-b  (new-peer-server ipfs-client reg-b)
+          http-a (start-http srv-a)
+          http-b (start-http srv-b)]
+      (try
+        ;; Alice is homed on peer-A, Bob on peer-B.
+        ;; Each registry knows about both peers so batch can cross-fetch.
+        (let [alice (add-user! ipfs-client srv-a reg-a (:base-url http-a))
+              bob   (add-user! ipfs-client srv-b reg-b (:base-url http-b))]
+          ;; Both registries need to know both users so cross-peer lookup works.
+          (registry/register! reg-a (:user-id bob)   (:base-url http-b))
+          (registry/register! reg-b (:user-id alice) (:base-url http-a))
+
+          ;; Bob publishes some food relations.
+          (submit! srv-b bob
+                   (assoc (make-dr bob)
+                          "direct-relations/contexts"
+                          [{"direct-relations-context/context-path" ["food"]
+                            "direct-relations-context/relations"
+                            [{"direct-relations-rel/type"    "uri"
+                              "direct-relations-rel-uri/uri" "https://bob-food.example.com"}]}]))
+
+          ;; Alice (on peer-A) relates to Bob (on peer-B) in the food context.
+          (submit! srv-a alice
+                   (assoc (make-dr alice)
+                          "direct-relations/contexts"
+                          [{"direct-relations-context/context-path" ["food"]
+                            "direct-relations-context/relations"
+                            [{"direct-relations-rel/type"    "uri"
+                              "direct-relations-rel-uri/uri" "https://alice-food.example.com"}
+                             {"direct-relations-rel/type"                  "user"
+                              "direct-relations-rel-user/user-id"          (:user-id bob)
+                              "direct-relations-rel-user/transitive-depth" 2}]}]))
+
+          ;; Run batch on both peers so peer-A can compute Alice's deps
+          ;; by fetching Bob's index from peer-B over HTTP.
+          (run-batch-rounds! [srv-a srv-b] 2)
+
+          (let [deps      (fetch-deps srv-a alice ["food"])
+                all-cids  (all-dr-cids deps)
+                bob-user  (state/get-user srv-b (:user-id bob))
+                bob-dr-cid (:latest-dr-cid bob-user)]
+            (testing "deps has at least 2 hops (Alice's own + Bob's)"
+              (is (>= (count (get deps "context-relations-deps/hops" [])) 2)))
+            (testing "Bob's DR CID appears in Alice's cross-peer deps"
+              (is (contains? all-cids bob-dr-cid)))))
+        (finally
+          (.stop ^Server (:jetty http-a))
+          (.stop ^Server (:jetty http-b)))))))
+
+(deftest test-two-peer-context-isolation
+  (with-ipfs [ipfs-client]
+    (let [reg-a  (registry/new-registry)
+          reg-b  (registry/new-registry)
+          srv-a  (new-peer-server ipfs-client reg-a)
+          srv-b  (new-peer-server ipfs-client reg-b)
+          http-a (start-http srv-a)
+          http-b (start-http srv-b)]
+      (try
+        (let [alice (add-user! ipfs-client srv-a reg-a (:base-url http-a))
+              bob   (add-user! ipfs-client srv-b reg-b (:base-url http-b))]
+          (registry/register! reg-a (:user-id bob)   (:base-url http-b))
+          (registry/register! reg-b (:user-id alice) (:base-url http-a))
+
+          ;; Bob has both food and news relations.
+          (submit! srv-b bob
+                   (assoc (make-dr bob)
+                          "direct-relations/contexts"
+                          [{"direct-relations-context/context-path" ["food"]
+                            "direct-relations-context/relations"
+                            [{"direct-relations-rel/type"    "uri"
+                              "direct-relations-rel-uri/uri" "https://bob-food.example.com"}]}
+                           {"direct-relations-context/context-path" ["news"]
+                            "direct-relations-context/relations"
+                            [{"direct-relations-rel/type"    "uri"
+                              "direct-relations-rel-uri/uri" "https://bob-news.example.com"}]}]))
+
+          ;; Alice follows Bob only in food.
+          (submit! srv-a alice
+                   (assoc (make-dr alice)
+                          "direct-relations/contexts"
+                          [{"direct-relations-context/context-path" ["food"]
+                            "direct-relations-context/relations"
+                            [{"direct-relations-rel/type"                  "user"
+                              "direct-relations-rel-user/user-id"          (:user-id bob)
+                              "direct-relations-rel-user/transitive-depth" 2}]}
+                           {"direct-relations-context/context-path" ["news"]
+                            "direct-relations-context/relations"
+                            [{"direct-relations-rel/type"    "uri"
+                              "direct-relations-rel-uri/uri" "https://alice-news.example.com"}]}]))
+
+          (run-batch-rounds! [srv-a srv-b] 2)
+
+          (let [bob-user   (state/get-user srv-b (:user-id bob))
+                bob-dr-cid (:latest-dr-cid bob-user)
+                food-deps  (fetch-deps srv-a alice ["food"])
+                news-deps  (fetch-deps srv-a alice ["news"])
+                food-cids  (all-dr-cids food-deps)
+                news-cids  (all-dr-cids news-deps)]
+            (testing "Bob's DR CID in Alice's food deps (cross-peer)"
+              (is (contains? food-cids bob-dr-cid)))
+            (testing "Bob's DR CID NOT in Alice's news deps (context isolation)"
+              (is (not (contains? news-cids bob-dr-cid))))))
+        (finally
+          (.stop ^Server (:jetty http-a))
+          (.stop ^Server (:jetty http-b)))))))
+

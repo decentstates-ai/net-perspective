@@ -34,17 +34,35 @@ func GenerateKeyPair() (*KeyPair, error) {
 	return keyPairFrom(pub, priv)
 }
 
-// KeyPairFromBytes reconstructs a KeyPair from raw private key bytes.
-func KeyPairFromBytes(privBytes []byte) (*KeyPair, error) {
-	if len(privBytes) != mldsa44.PrivateKeySize {
-		return nil, fmt.Errorf("invalid private key size: got %d, want %d", len(privBytes), mldsa44.PrivateKeySize)
+// KeyPairFromSeed reconstructs a KeyPair from a 32-byte seed.
+// This is the canonical on-disk format, compatible with the Clojure implementation.
+func KeyPairFromSeed(seed []byte) (*KeyPair, error) {
+	if len(seed) != mldsa44.SeedSize {
+		return nil, fmt.Errorf("invalid seed size: got %d, want %d", len(seed), mldsa44.SeedSize)
 	}
-	var buf [mldsa44.PrivateKeySize]byte
-	copy(buf[:], privBytes)
-	var sk mldsa44.PrivateKey
-	sk.Unpack(&buf)
-	pub := sk.Public().(*mldsa44.PublicKey)
-	return keyPairFrom(pub, &sk)
+	var buf [mldsa44.SeedSize]byte
+	copy(buf[:], seed)
+	pub, sk := mldsa44.NewKeyFromSeed(&buf)
+	return keyPairFrom(pub, sk)
+}
+
+// KeyPairFromBytes reconstructs a KeyPair from raw private key bytes or a seed.
+// Accepts both the legacy full-key format (mldsa44.PrivateKeySize bytes) and
+// the current seed format (mldsa44.SeedSize bytes) so old key files still load.
+func KeyPairFromBytes(data []byte) (*KeyPair, error) {
+	if len(data) == mldsa44.SeedSize {
+		return KeyPairFromSeed(data)
+	}
+	if len(data) == mldsa44.PrivateKeySize {
+		var buf [mldsa44.PrivateKeySize]byte
+		copy(buf[:], data)
+		var sk mldsa44.PrivateKey
+		sk.Unpack(&buf)
+		pub := sk.Public().(*mldsa44.PublicKey)
+		return keyPairFrom(pub, &sk)
+	}
+	return nil, fmt.Errorf("invalid key size: got %d bytes (want %d seed or %d full key)",
+		len(data), mldsa44.SeedSize, mldsa44.PrivateKeySize)
 }
 
 func keyPairFrom(pub *mldsa44.PublicKey, priv *mldsa44.PrivateKey) (*KeyPair, error) {

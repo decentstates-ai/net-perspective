@@ -2,10 +2,11 @@
 //
 // Modes:
 //
-//	produce  – generate a key pair, sign a DR envelope, print JSON to stdout
-//	verify   – read JSON from stdin, verify signature, exit 0 on success
+//	produce      – generate a key pair, sign a DR envelope, print JSON to stdout
+//	verify       – read JSON from stdin, verify signature, exit 0 on success
+//	seed-roundtrip – read a base64 seed from stdin, reconstruct key pair, print encoded public key
 //
-// JSON format:
+// Fixture JSON format for produce/verify:
 //
 //	{
 //	  "encoded_public_key": "<base64>",
@@ -93,9 +94,30 @@ func verify() {
 	fmt.Printf("ok: DR version=%d contexts=%d\n", dr.Version, len(dr.Contexts))
 }
 
+// seedRoundTrip reads a base64 seed from stdin, reconstructs the key pair,
+// and prints the base64-encoded public key — used to verify seed compatibility.
+func seedRoundTrip() {
+	var b64seed string
+	if _, err := fmt.Scan(&b64seed); err != nil {
+		fmt.Fprintln(os.Stderr, "read seed:", err)
+		os.Exit(1)
+	}
+	seed, err := base64.StdEncoding.DecodeString(b64seed)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "decode seed:", err)
+		os.Exit(1)
+	}
+	kp, err := doc.KeyPairFromSeed(seed)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "KeyPairFromSeed:", err)
+		os.Exit(1)
+	}
+	fmt.Println(base64.StdEncoding.EncodeToString(kp.EncodedPublicKey))
+}
+
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: cross-compat <produce|verify>")
+		fmt.Fprintln(os.Stderr, "usage: cross-compat <produce|verify|seed-roundtrip>")
 		os.Exit(1)
 	}
 	switch os.Args[1] {
@@ -103,6 +125,8 @@ func main() {
 		produce()
 	case "verify":
 		verify()
+	case "seed-roundtrip":
+		seedRoundTrip()
 	default:
 		fmt.Fprintln(os.Stderr, "unknown mode:", os.Args[1])
 		os.Exit(1)

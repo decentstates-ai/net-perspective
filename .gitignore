@@ -2,3 +2,13 @@
 /tmp
 /forks
 /result
+# compiled binaries
+/peer
+/go/peer
+/go/np-client
+# clojure build artifacts
+/clojure/target/
+/clojure/.cpcache/
+/clojure/.np/
+# editor swap files
+*.swp

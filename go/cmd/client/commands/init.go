@@ -32,7 +32,7 @@ func InitCmd(cfg *Config) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := os.WriteFile(cfg.keyFile(), kp.Private.Bytes(), 0600); err != nil {
+			if err := os.WriteFile(cfg.keyFile(), kp.Private.Seed(), 0600); err != nil {
 				return err
 			}
 

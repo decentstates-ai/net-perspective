@@ -49,7 +49,8 @@
         st-resp (try (http/get (str peer-url "/status/users/" hex-id) {:as :json})
                      (catch Exception _ nil))]
     (when (and st-resp (= 200 (:status st-resp)))
-      (let [index-cid (get-in st-resp [:body "index-cid"])]
+      ;; clj-http keywordizes JSON response keys by default.
+      (let [index-cid (get-in st-resp [:body :index-cid])]
         (when (seq index-cid)
           (let [fetch-fn (fn [cid]
                            (:body (http/get (str peer-url "/cid/" cid)

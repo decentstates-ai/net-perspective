@@ -55,7 +55,7 @@ func loadOrCreateKey(path string) (*doc.KeyPair, error) {
 		if err != nil {
 			return nil, err
 		}
-		if err := os.WriteFile(path, kp.Private.Bytes(), 0600); err != nil {
+		if err := os.WriteFile(path, kp.Private.Seed(), 0600); err != nil {
 			return nil, err
 		}
 		log.Printf("generated new key pair, saved to %s", path)
