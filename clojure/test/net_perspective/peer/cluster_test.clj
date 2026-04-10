@@ -37,8 +37,8 @@
   (let [repo-dir (doto (File. (System/getProperty "java.io.tmpdir")
                                (str "np-test-ipfs-" (System/nanoTime)))
                    (.mkdirs))
-        env      (into (System/getenv)
-                       {"IPFS_PATH" (.getAbsolutePath repo-dir)})
+        env      (into {} (System/getenv))
+        env      (assoc env "IPFS_PATH" (.getAbsolutePath repo-dir))
         run!     (fn [& args]
                    (let [r (apply sh "ipfs" (concat args [:env env]))]
                      (when (not= 0 (:exit r))

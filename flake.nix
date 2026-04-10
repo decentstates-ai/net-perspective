@@ -72,6 +72,8 @@
               pkgs.hugo
               pkgs.go
               pkgs.kubo
+              pkgs.clojure
+              pkgs.jdk21
             ];
           };
         };

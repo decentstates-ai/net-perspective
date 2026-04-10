@@ -112,11 +112,13 @@
 ;; Sign and verify
 
 (defn sign
-  "Signs msg-bytes with the private key. Returns signature bytes."
+  "Signs msg-bytes with the private key. Returns signature bytes.
+   Uses update(byte[], 0, len) + generateSignature() — the BC 1.80 API."
   ^bytes [^MLDSAPrivateKeyParameters priv-params ^bytes msg]
   (let [signer (doto (MLDSASigner.)
-                 (.init true priv-params))]
-    (.generateSignature signer msg)))
+                 (.init true priv-params)
+                 (.update msg 0 (alength msg)))]
+    (.generateSignature signer)))
 
 (defn verify
   "Returns true if signature is valid for msg under the encoded public key."
@@ -124,5 +126,6 @@
   (let [raw    (decode-public-key encoded-pubkey)
         params (MLDSAPublicKeyParameters. MLDSAParameters/ml_dsa_44 raw)
         signer (doto (MLDSASigner.)
-                 (.init false params))]
-    (.verifySignature signer msg signature)))
+                 (.init false params)
+                 (.update msg 0 (alength msg)))]
+    (.verifySignature signer signature)))

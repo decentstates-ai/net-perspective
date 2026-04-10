@@ -16,7 +16,8 @@
             [ring.adapter.jetty :as jetty])
   (:import [java.io File]
            [java.nio.file Files StandardOpenOption]
-           [org.eclipse.jetty.server Server]))
+           [org.eclipse.jetty.server Server])
+  (:gen-class))
 
 ;; ---------------------------------------------------------------------------
 ;; Key persistence

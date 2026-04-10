@@ -174,25 +174,30 @@
      "envelope/user-public-key" (:encoded-public-key kp)
      "envelope/signature"       sig}))
 
+(defn ensure-bytes
+  "Returns v as a byte array. Accepts byte arrays (pass-through) or
+   base64 strings (decoded). Needed because JSON round-trip converts
+   byte arrays to base64 strings."
+  ^bytes [v]
+  (cond
+    (bytes? v)  v
+    (string? v) (b64-decode v)
+    :else (throw (ex-info "expected bytes or base64 string" {:value v}))))
+
 (defn unwrap
   "Verifies an envelope map and returns the decoded content map.
-   Throws if the signature is invalid or user-id is inconsistent."
+   Throws if the signature is invalid or user-id is inconsistent.
+   Accepts envelopes that have been through a JSON round-trip (byte
+   array fields may be base64 strings)."
   [envelope]
-  (let [enc-pubkey (get envelope "envelope/user-public-key")
-        user-id    (get envelope "envelope/user-id")
-        signature  (get envelope "envelope/signature")
+  (let [enc-pubkey (ensure-bytes (get envelope "envelope/user-public-key"))
+        user-id    (ensure-bytes (get envelope "envelope/user-id"))
+        signature  (ensure-bytes (get envelope "envelope/signature"))
         content    (get envelope "envelope/content")]
-    ;; Verify user-id matches the encoded public key.
-    (let [expected-uid (-> enc-pubkey
-                           crypto/decode-public-key
-                           (->> (crypto/encode-public-key))
-                           crypto/compute-user-id)]
-      ;; compare the stored user-id against recomputed one
-      (when-not (java.util.Arrays/equals
-                 ^bytes user-id
-                 ^bytes (crypto/compute-user-id enc-pubkey))
-        (throw (ex-info "user-id does not match public key" {}))))
-    ;; Re-canonicalise content for signature verification.
+    (when-not (java.util.Arrays/equals
+               ^bytes user-id
+               ^bytes (crypto/compute-user-id enc-pubkey))
+      (throw (ex-info "user-id does not match public key" {})))
     (let [content-bytes (marshal content)]
       (when-not (crypto/verify enc-pubkey content-bytes signature)
         (throw (ex-info "invalid envelope signature" {}))))

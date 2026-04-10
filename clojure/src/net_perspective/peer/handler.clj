@@ -50,17 +50,24 @@
       (when (nil? body)   (submit-error 400 "missing body"))
       (when (nil? ui-env) (submit-error 400 "missing user-info-envelope"))
       (when (nil? dr-env) (submit-error 400 "missing direct-relations-envelope"))
-      (let [ui  (try (schema/unwrap ui-env)
-                     (catch Exception e (submit-error 400 (str "invalid user-info envelope: " (.getMessage e)))))
-            dr  (try (schema/unwrap dr-env)
-                     (catch Exception e (submit-error 400 (str "invalid direct-relations envelope: " (.getMessage e)))))
-            ui-uid (get ui "user-info/user-id")
-            dr-uid (get dr "direct-relations/user-id")]
+      (let [ui     (try (schema/unwrap ui-env)
+                        (catch Exception e
+                          (submit-error 400 (str "invalid user-info: " (.getMessage e)))))
+            dr     (try (schema/unwrap dr-env)
+                        (catch Exception e
+                          (submit-error 400 (str "invalid direct-relations: " (.getMessage e)))))
+            ui-uid (schema/ensure-bytes (get ui "user-info/user-id"))
+            dr-uid (schema/ensure-bytes (get dr "direct-relations/user-id"))
+            ;; The envelope signer must be the same user as the content claims.
+            dr-signer (schema/ensure-bytes (get dr-env "envelope/user-id"))]
         (when-not (java.util.Arrays/equals ^bytes ui-uid ^bytes dr-uid)
           (submit-error 400 "user-id mismatch between envelopes"))
-        (let [user-id (get ui "user-info/user-id")
+        (when-not (java.util.Arrays/equals ^bytes dr-uid ^bytes dr-signer)
+          (submit-error 400 "dr envelope signer does not match dr content user-id"))
+        (let [user-id ui-uid
               user    (state/get-user server user-id)]
-          (when-not user (submit-error 403 "user not homed here"))
+          (when-not user
+            (submit-error 403 "user not homed here"))
           (when (<= (get dr "direct-relations/timestamp-ns" 0)
                     (state/dr-timestamp server user-id))
             (submit-error 409 "stale submission"))
@@ -73,7 +80,7 @@
             (json-resp {"cid" dr-cid})))))
     (catch clojure.lang.ExceptionInfo e
       (or (::resp (ex-data e))
-          (error-resp 500 (.getMessage e)))))))
+          (error-resp 500 (.getMessage e))))))
 
 ;; ---------------------------------------------------------------------------
 ;; GET /user/:userID
