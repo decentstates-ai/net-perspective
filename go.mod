@@ -8,6 +8,7 @@ require (
 	github.com/cloudflare/circl v1.6.3 // indirect
 	github.com/crackcomm/go-gitignore v0.0.0-20170627025303-887ab5e44cc3 // indirect
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.1.0 // indirect
+	github.com/dominikbraun/graph v0.23.0 // indirect
 	github.com/gowebpki/jcs v1.0.1 // indirect
 	github.com/ipfs/boxo v0.12.0 // indirect
 	github.com/ipfs/go-cid v0.4.1 // indirect
