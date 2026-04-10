@@ -29,10 +29,8 @@ clojure/
 ├── src/
 │   └── net_perspective/
 │       ├── main.clj      # entrypoint: subcommand dispatch
-│       ├── doc/
-│       │   ├── crypto.clj    # ML-DSA-44, key generation, multiformats
-│       │   ├── encode.clj    # JCS canonicalization (RFC 8785)
-│       │   └── envelope.clj  # wrap / unwrap signed envelopes
+│       ├── schema.clj    # Malli schemas, JCS encode/decode, wrap/unwrap envelopes
+│       ├── crypto.clj    # ML-DSA-44, key generation, multiformats
 │       ├── ipfs/
 │       │   └── client.clj    # kubo HTTP API: add, cat, publish, resolve, key-gen
 │       └── peer/
@@ -43,9 +41,8 @@ clojure/
 │           └── scheduler.clj # 10-minute batch scheduler
 └── test/
     └── net_perspective/
-        ├── doc/
-        │   ├── crypto_test.clj
-        │   └── envelope_test.clj
+        ├── schema_test.clj
+        ├── crypto_test.clj
         └── peer/
             ├── handler_test.clj
             └── cluster_test.clj
@@ -61,16 +58,62 @@ clojure/
 | `org.bouncycastle/bcprov-jdk18on` | 1.79 | Bouncy Castle core provider |
 | `org.bouncycastle/bcpqc-jdk18on` | 1.79 | ML-DSA-44 (post-quantum) |
 | `io.github.erdtman/java-json-canonicalization` | 1.1 | RFC 8785 JCS |
+| `metosin/malli` | 0.16.4 | Schema definitions, validation, coercion |
 | `cheshire/cheshire` | 5.13.0 | JSON encode/decode |
 | `ring/ring-core` | 1.12.2 | HTTP server abstraction |
 | `ring/ring-jetty-adapter` | 1.12.2 | Embedded Jetty |
-| `metosin/reitit` | 0.7.2 | HTTP routing |
+| `metosin/reitit` | 0.7.2 | HTTP routing (with malli request/response coercion) |
 | `clj-http/clj-http` | 3.13.0 | HTTP client (multipart support for IPFS /add) |
 | `org.clojure/tools.cli` | 1.1.230 | CLI argument parsing |
 
 ---
 
 ## Key implementation details
+
+### Malli schemas (`schema.clj`)
+
+All document shapes are defined in a single `net-perspective.schema` namespace
+using Malli. This acts as the authoritative description of the wire format and
+is used for:
+
+- **Validation** of incoming HTTP request bodies and IPFS-fetched documents
+- **Coercion** of JSON-parsed maps (string keys → keyword keys, base64 strings → byte arrays)
+- **Generation** of test data via `malli.generator`
+- **Reitit integration** — Reitit uses Malli schemas for request/response coercion
+  out of the box when `reitit.coercion.malli` is enabled
+
+Rough schema sketch:
+
+```clojure
+(def DirectRelation
+  [:map
+   [:direct-relations-rel/type [:enum "user" "uri"]]
+   [:direct-relations-rel-uri/uri {:optional true} :string]
+   [:direct-relations-rel-user/user-id {:optional true} bytes?]
+   [:direct-relations-rel-user/transitive-depth {:optional true}
+    [:int {:min 1 :max 10}]]
+   ;; ... etc
+   ])
+
+(def DirectRelations
+  [:map
+   [:direct-relations/direct-relations-version :int]
+   [:direct-relations/timestamp-ns :int]
+   [:direct-relations/user-id bytes?]
+   [:direct-relations/contexts [:vector DirectRelationsContext]]])
+
+(def Envelope
+  [:map
+   [:envelope/content :any]
+   [:envelope/user-id bytes?]
+   [:envelope/user-public-key bytes?]
+   [:envelope/signature bytes?]])
+```
+
+All five spec document types are covered: `Envelope`, `UserInfo`,
+`DirectRelations`, `ContextRelationsDeps`, `ContextRelationsDepsIndex`.
+
+Reference: `local-docs/malli.md`
 
 ### ML-DSA-44 via Bouncy Castle
 
@@ -189,14 +232,14 @@ handles this via a custom encoder for `(Class/forName "[B")`.
 
 ## Phases
 
-### Phase 1 — Project skeleton + doc layer
+### Phase 1 — Project skeleton + schema/crypto layer
 
 - `clojure/deps.edn`, `clojure/build.clj`
-- `doc/crypto.clj`: key-gen, encode-public-key, compute-user-id, sign, verify,
-  key-pair-from-seed
-- `doc/encode.clj`: marshal, unmarshal (JCS + Cheshire)
-- `doc/envelope.clj`: wrap, unwrap
-- Tests: crypto roundtrip, envelope roundtrip, tamper detection
+- `schema.clj`: Malli schemas for all 5 document types; JCS marshal/unmarshal;
+  wrap/unwrap envelope logic; validation and coercion helpers
+- `crypto.clj`: ML-DSA-44 key-gen, encode-public-key, compute-user-id, sign,
+  verify, key-pair-from-seed
+- Tests: crypto roundtrip, envelope roundtrip, tamper detection, schema validation
 
 ### Phase 2 — IPFS HTTP client
 
