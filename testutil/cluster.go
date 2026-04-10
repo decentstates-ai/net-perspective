@@ -92,6 +92,7 @@ func (c *Cluster) AddUser(t testing.TB, peerIdx int) *UserFixture {
 	pf.Server.AddHomedUser(u)
 	c.Registry.Register(kp.UserID, pf.BaseURL)
 
+	t.Logf("user %x homed at peer %s (ipns %s)", kp.UserID[:8], pf.BaseURL, ipnsAddr)
 	return &UserFixture{KP: kp, Home: pf}
 }
 
@@ -131,6 +132,11 @@ func (uf *UserFixture) Submit(t testing.TB, dr doc.DirectRelations) {
 		b, _ := io.ReadAll(resp.Body)
 		t.Fatalf("submit: status %s: %s", resp.Status, bytes.TrimSpace(b))
 	}
+	var result struct {
+		CID string `json:"cid"`
+	}
+	json.NewDecoder(resp.Body).Decode(&result)
+	t.Logf("user %x submitted DR → CID %s (%d contexts)", uf.KP.UserID[:8], result.CID, len(dr.Contexts))
 }
 
 // RunAllBatches runs one batch update round across every peer in the cluster.
@@ -150,7 +156,21 @@ func (c *Cluster) RunAllBatches(t testing.TB) {
 func (c *Cluster) RunBatchRounds(t testing.TB, rounds int) {
 	t.Helper()
 	for i := 0; i < rounds; i++ {
+		t.Logf("--- batch round %d/%d ---", i+1, rounds)
 		c.RunAllBatches(t)
+		for _, pf := range c.Peers {
+			resp, err := http.Get(pf.BaseURL + "/status/users")
+			if err != nil || resp.StatusCode != http.StatusOK {
+				continue
+			}
+			var users []peer.UserStatus
+			json.NewDecoder(resp.Body).Decode(&users)
+			resp.Body.Close()
+			for _, u := range users {
+				t.Logf("  peer %s  user %s  index=%s  contexts=%d",
+					pf.BaseURL, u.UserIDHex[:16], truncate(u.IndexCID, 20), u.ContextCount)
+			}
+		}
 	}
 }
 
@@ -223,6 +243,56 @@ func (uf *UserFixture) FetchDeps(t testing.TB, contextPath []string) doc.Context
 	return doc.ContextRelationsDeps{}
 }
 
+// TryFetchIndex fetches a user's current index without failing the test.
+// Returns the zero value and false if the user has no index yet or on any error.
+func (uf *UserFixture) TryFetchIndex(t testing.TB) (doc.ContextRelationsDepsIndex, bool) {
+	t.Helper()
+	resp, err := http.Get(uf.Home.BaseURL + "/status/users/" + hexID(uf.KP.UserID))
+	if err != nil {
+		return doc.ContextRelationsDepsIndex{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return doc.ContextRelationsDepsIndex{}, false
+	}
+	var st peer.UserStatus
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil || st.IndexCID == "" {
+		return doc.ContextRelationsDepsIndex{}, false
+	}
+
+	cidResp, err := http.Get(uf.Home.BaseURL + "/cid/" + st.IndexCID)
+	if err != nil {
+		return doc.ContextRelationsDepsIndex{}, false
+	}
+	defer cidResp.Body.Close()
+	if cidResp.StatusCode != http.StatusOK {
+		return doc.ContextRelationsDepsIndex{}, false
+	}
+	var index doc.ContextRelationsDepsIndex
+	if err := json.NewDecoder(cidResp.Body).Decode(&index); err != nil {
+		return doc.ContextRelationsDepsIndex{}, false
+	}
+	return index, true
+}
+
+// TryFetchDepsByCID fetches a deps document by CID without failing the test.
+func (uf *UserFixture) TryFetchDepsByCID(t testing.TB, depsCID string) (doc.ContextRelationsDeps, bool) {
+	t.Helper()
+	resp, err := http.Get(uf.Home.BaseURL + "/cid/" + depsCID)
+	if err != nil {
+		return doc.ContextRelationsDeps{}, false
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return doc.ContextRelationsDeps{}, false
+	}
+	var deps doc.ContextRelationsDeps
+	if err := json.NewDecoder(resp.Body).Decode(&deps); err != nil {
+		return doc.ContextRelationsDeps{}, false
+	}
+	return deps, true
+}
+
 // AllCIDsInDeps returns the flat set of all direct-relations CIDs across all hops.
 func AllCIDsInDeps(deps doc.ContextRelationsDeps) map[string]struct{} {
 	out := make(map[string]struct{})
@@ -248,4 +318,11 @@ func pathsEqual(a, b []string) bool {
 
 func hexID(id []byte) string {
 	return fmt.Sprintf("%x", id)
+}
+
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
 }

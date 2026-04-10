@@ -1,12 +1,33 @@
 package peer_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/decentstates/net-perspective/pkg/doc"
 	"github.com/decentstates/net-perspective/testutil"
 )
+
+func logDeps(t *testing.T, name, context string, deps doc.ContextRelationsDeps) {
+	t.Helper()
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s/%s deps (%d hops):\n", name, context, len(deps.Hops))
+	for _, h := range deps.Hops {
+		addrs := make([]string, len(h.DirectRelationsAddresses))
+		for i, a := range h.DirectRelationsAddresses {
+			s := string(a)
+			if len(s) > 20 {
+				s = s[:20] + "…"
+			}
+			addrs[i] = s
+		}
+		fmt.Fprintf(&sb, "  hop %d: %d DR(s) [%s] size=%d\n",
+			h.Hop, len(h.DirectRelationsAddresses), strings.Join(addrs, ", "), h.Size)
+	}
+	t.Log(sb.String())
+}
 
 // TestLocalChain: two users on the same peer. Alice relates to Bob.
 // After batch, Alice's food deps at hop 1 contains Alice's DR,
@@ -48,12 +69,11 @@ func TestLocalChain(t *testing.T) {
 	c.RunBatchRounds(t, 2)
 
 	deps := alice.FetchDeps(t, []string{"food"})
+	logDeps(t, "alice", "food", deps)
 
 	if len(deps.Hops) < 2 {
 		t.Fatalf("expected at least 2 hops, got %d", len(deps.Hops))
 	}
-
-	// Hop 1 must contain Alice's DR CID; hop 2 must contain Bob's.
 	cids := testutil.AllCIDsInDeps(deps)
 	if len(cids) < 2 {
 		t.Errorf("expected at least 2 distinct DR CIDs across hops, got %d: %v", len(cids), cids)
