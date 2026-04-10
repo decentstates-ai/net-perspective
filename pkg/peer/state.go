@@ -68,9 +68,10 @@ func (u *HomedUser) IndexCID() string {
 
 // Server holds peer server state.
 type Server struct {
-	IPFS    ipfsstore.Store
-	SelfKP  *doc.KeyPair // peer's own identity
-	Addr    string       // HTTP listen address
+	IPFS     ipfsstore.Store
+	SelfKP   *doc.KeyPair  // peer's own identity
+	Addr     string        // HTTP listen address
+	Registry *PeerRegistry // optional; enables cross-peer dep fetching
 
 	mu    sync.RWMutex
 	users map[string]*HomedUser // keyed by base64(user-id)

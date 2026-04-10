@@ -1,6 +1,8 @@
 package peer
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 
@@ -18,6 +20,8 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /submit", s.handleSubmit)
 	mux.HandleFunc("GET /user/{userID}", s.handleGetUserInfo)
 	mux.HandleFunc("GET /cid/{cid}", s.handleGetByCID)
+	mux.HandleFunc("GET /status/users", s.handleStatusUsers)
+	mux.HandleFunc("GET /status/users/{userID}", s.handleStatusUser)
 }
 
 // handleSubmit accepts a signed user-info and direct-relations from a user-client.
@@ -128,4 +132,68 @@ func (s *Server) handleGetByCID(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(data)
+}
+
+// UserStatus is the JSON shape returned by the status endpoints.
+type UserStatus struct {
+	UserIDHex    string `json:"user-id"`
+	IndexCID     string `json:"index-cid"`
+	DRCID        string `json:"dr-cid"`
+	ContextCount int    `json:"context-count"`
+	TimestampNs  int64  `json:"timestamp-ns"`
+}
+
+// handleStatusUsers returns a summary of all homed users.
+func (s *Server) handleStatusUsers(w http.ResponseWriter, r *http.Request) {
+	users := s.AllUsers()
+	out := make([]UserStatus, 0, len(users))
+	for _, u := range users {
+		dr, drCID := u.DirectRelations()
+		st := UserStatus{
+			UserIDHex: hex.EncodeToString(u.KeyPair.UserID),
+			IndexCID:  u.IndexCID(),
+			DRCID:     drCID,
+		}
+		if dr != nil {
+			st.ContextCount = len(dr.Contexts)
+			st.TimestampNs = dr.TimestampNs
+		}
+		out = append(out, st)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(out)
+}
+
+// handleStatusUser returns the status for a single homed user.
+// The {userID} path parameter is hex-encoded.
+func (s *Server) handleStatusUser(w http.ResponseWriter, r *http.Request) {
+	hexID := r.PathValue("userID")
+	userID, err := hex.DecodeString(hexID)
+	if err != nil {
+		// also accept base64url
+		userID, err = base64.RawURLEncoding.DecodeString(hexID)
+		if err != nil {
+			http.Error(w, "invalid user-id", http.StatusBadRequest)
+			return
+		}
+	}
+
+	u := s.GetUser(userID)
+	if u == nil {
+		http.Error(w, "user not found", http.StatusNotFound)
+		return
+	}
+
+	dr, drCID := u.DirectRelations()
+	st := UserStatus{
+		UserIDHex: hex.EncodeToString(u.KeyPair.UserID),
+		IndexCID:  u.IndexCID(),
+		DRCID:     drCID,
+	}
+	if dr != nil {
+		st.ContextCount = len(dr.Contexts)
+		st.TimestampNs = dr.TimestampNs
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(st)
 }

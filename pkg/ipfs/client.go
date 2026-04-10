@@ -51,8 +51,16 @@ func (c *Client) Cat(cid string) ([]byte, error) {
 
 // PublishIPNS publishes cid under the IPNS key identified by keyName.
 // The key must already exist in the IPFS keystore.
+// allow-offline is set so this works when the daemon is running in offline mode.
 func (c *Client) PublishIPNS(keyName, cid string) error {
-	_, err := c.sh.PublishWithDetails("/ipfs/"+cid, keyName, 0, 0, false)
+	var resp struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	err := c.sh.Request("name/publish", "/ipfs/"+cid).
+		Option("key", keyName).
+		Option("allow-offline", true).
+		Exec(context.Background(), &resp)
 	if err != nil {
 		return fmt.Errorf("ipns publish %s -> %s: %w", keyName, cid, err)
 	}

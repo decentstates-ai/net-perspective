@@ -70,7 +70,8 @@
           default = pkgs.mkShellNoCC {
             packages = [
               pkgs.hugo
-              # self.packages.${system}.hugo-with-themes
+              pkgs.go
+              pkgs.kubo
             ];
           };
         };

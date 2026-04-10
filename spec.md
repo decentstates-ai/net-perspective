@@ -181,7 +181,17 @@ A peer is a user-client but also an IPFS client.
   - peer client returns from cache or if necessary fetches
 
 - user-client: collect context
-  - client-side operation: scans the fetched direct-relations documents to build the rendered view for a given context. No peer request needed beyond prior fetches.
+  - client-side operation: builds the rendered view for a given context by
+    traversing the CID graph in the context-relations-deps documents.
+  - Algorithm: BFS over direct-relations CIDs using two sets — `to-process`
+    (initially populated from hop-1 addresses) and `processed` (starts empty).
+    For each CID in `to-process` not already in `processed`: fetch the
+    direct-relations document, collect its URI and user entries for the context,
+    add any new user-relation CIDs to `to-process`, mark the CID as processed.
+  - Because documents are content-addressed, the same direct-relations document
+    reached via multiple paths (diamond dependencies) has the same CID and is
+    naturally deduplicated by the `processed` set. The peer emits CIDs without
+    deduplication; the client's visited-set handles it.
 
 ### Conflict resolution
 

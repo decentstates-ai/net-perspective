@@ -2,8 +2,12 @@ package peer
 
 import (
 	"context"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/decentstates/net-perspective/pkg/doc"
@@ -226,51 +230,125 @@ func (s *Server) fetchTransitiveDeps(
 
 // fetchUserContextDeps resolves a related user's context-relations-deps-index
 // and extracts the entry for the given context path.
+//
+// It first checks if the user is homed locally. If not, and a PeerRegistry is
+// configured, it queries the remote peer over HTTP.
 func (s *Server) fetchUserContextDeps(
 	ctx context.Context,
 	rel doc.DirectRelation,
 	contextPath []string,
 ) (*doc.ContextRelationsDeps, string, error) {
-	// Look up the related user's peer via their peered-users list.
-	// For now, check if they are homed locally.
-	relUser := s.GetUser(rel.RelUserID)
-	if relUser == nil {
-		// Remote fetch would go here; deferred to later implementation.
-		return &doc.ContextRelationsDeps{}, "", nil
-	}
-
-	indexCID := relUser.IndexCID()
-	if indexCID == "" {
-		return &doc.ContextRelationsDeps{}, "", nil
-	}
-
-	indexBytes, err := s.IPFS.Cat(indexCID)
-	if err != nil {
-		return nil, "", err
-	}
-
-	var index doc.ContextRelationsDepsIndex
-	if err := doc.Unmarshal(indexBytes, &index); err != nil {
-		return nil, "", err
-	}
-
 	targetPath := contextPath
 	if len(rel.RelContextPath) > 0 {
 		targetPath = rel.RelContextPath
 	}
 
+	// Try local first.
+	if relUser := s.GetUser(rel.RelUserID); relUser != nil {
+		return s.fetchLocalUserContextDeps(relUser, targetPath)
+	}
+
+	// Try remote via peer registry.
+	if s.Registry != nil {
+		if peerURL, ok := s.Registry.Lookup(rel.RelUserID); ok {
+			return s.fetchRemoteUserContextDeps(ctx, peerURL, rel.RelUserID, targetPath)
+		}
+	}
+
+	return &doc.ContextRelationsDeps{}, "", nil
+}
+
+func (s *Server) fetchLocalUserContextDeps(
+	relUser *HomedUser,
+	targetPath []string,
+) (*doc.ContextRelationsDeps, string, error) {
+	indexCID := relUser.IndexCID()
+	if indexCID == "" {
+		return &doc.ContextRelationsDeps{}, "", nil
+	}
+	indexBytes, err := s.IPFS.Cat(indexCID)
+	if err != nil {
+		return nil, "", err
+	}
+	return extractDepsFromIndex(indexBytes, targetPath, s.IPFS.Cat)
+}
+
+// fetchRemoteUserContextDeps fetches a user's index from a remote peer via HTTP,
+// then fetches the specific deps document for the target context path.
+func (s *Server) fetchRemoteUserContextDeps(
+	ctx context.Context,
+	peerBaseURL string,
+	userID []byte,
+	targetPath []string,
+) (*doc.ContextRelationsDeps, string, error) {
+	// GET /status/users/{hexUserID} to find the index CID.
+	statusURL := peerBaseURL + "/status/users/" + hex.EncodeToString(userID)
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, "", fmt.Errorf("fetch remote status: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return &doc.ContextRelationsDeps{}, "", nil
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", fmt.Errorf("remote status: %s", resp.Status)
+	}
+
+	var st UserStatus
+	if err := json.NewDecoder(resp.Body).Decode(&st); err != nil {
+		return nil, "", fmt.Errorf("decode remote status: %w", err)
+	}
+	if st.IndexCID == "" {
+		return &doc.ContextRelationsDeps{}, "", nil
+	}
+
+	// Fetch the index document via /cid/.
+	catRemote := func(cid string) ([]byte, error) {
+		url := peerBaseURL + "/cid/" + cid
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("GET %s: %s", url, resp.Status)
+		}
+		return io.ReadAll(resp.Body)
+	}
+
+	indexBytes, err := catRemote(st.IndexCID)
+	if err != nil {
+		return nil, "", fmt.Errorf("fetch remote index: %w", err)
+	}
+	return extractDepsFromIndex(indexBytes, targetPath, catRemote)
+}
+
+// extractDepsFromIndex decodes an index document, finds the entry matching
+// targetPath, and fetches its deps document using the provided fetch function.
+func extractDepsFromIndex(
+	indexBytes []byte,
+	targetPath []string,
+	fetch func(cid string) ([]byte, error),
+) (*doc.ContextRelationsDeps, string, error) {
+	var index doc.ContextRelationsDepsIndex
+	if err := doc.Unmarshal(indexBytes, &index); err != nil {
+		return nil, "", err
+	}
 	for _, entry := range index.Contexts {
 		if pathMatches(entry.ContextPath, targetPath) {
-			depsCIDStr := string(entry.ContextRelsDepsAddress)
-			depsBytes, err := s.IPFS.Cat(depsCIDStr)
+			depsCID := string(entry.ContextRelsDepsAddress)
+			depsBytes, err := fetch(depsCID)
 			if err != nil {
-				return nil, depsCIDStr, err
+				return nil, depsCID, err
 			}
 			var deps doc.ContextRelationsDeps
 			if err := doc.Unmarshal(depsBytes, &deps); err != nil {
-				return nil, depsCIDStr, err
+				return nil, depsCID, err
 			}
-			return &deps, depsCIDStr, nil
+			return &deps, depsCID, nil
 		}
 	}
 	return &doc.ContextRelationsDeps{}, "", nil
