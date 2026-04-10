@@ -17,7 +17,7 @@ This this results in emergent curation of information.
 
 What's the jist of this tech-wise? Signed documents of direct-relations,
 submitted to and hosted by peers, DHT as a directory to find users' data, every
-five minutes peers servers calculate data dependency sets inductively from
+ten minutes peers servers calculate data dependency sets inductively from
 other direct relation dependency sets, you seed data you cache, popular data
 will have more seeders. Peers keep your dependant direct-relation documents
 cached and quickly available. When you relate to someone you can see the size
@@ -53,20 +53,21 @@ All documents are encoded RFC 8785 JSON.
 ### envelope
 
 - envelope/content: arbitrary json
-- envelope/user-id: multiformats/multihash of multiformats/multicodec encoded public key, seems like ml-dsa-44
-- envelope/user-public-key: multiformats/multicodec encoded public key, seems like ml-dsa-44
+- envelope/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
+- envelope/user-public-key: multiformats/multicodec encoded public key, ml-dsa-44
 - envelope/signature: string of signature signing the content
 
 ### user-info
 
 Within a signed envelope:
 
+- user-info/version: integer
 - user-info/timestamp-ns: unix timestamp in ns
-- user-info/user-id: multiformats/multihash of multiformats/multicodec encoded public key, seems like ml-dsa-44
-- user-info/user-public-key: multiformats/multicodec encoded public key, seems like ml-dsa-44
+- user-info/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
+- user-info/user-public-key: multiformats/multicodec encoded public key, ml-dsa-44
 - user-info/direct-relations-ipns-address
 - user-info/context-relations-deps-index-ipns-address
-- user-info/peered-by: array of user-ids that peer this user.
+- user-info/trusted-peers: array of user-ids the user trusts to peer them.
 - user-info/peered-users: map of user-id ->
   - user-info-peered-user/user-id
   - user-info-peered-user/context-relations-deps-index-address
@@ -79,14 +80,14 @@ Within a signed envelope:
 Fields:
 - direct-relations/direct-relations-version:
 - direct-relations/timestamp-ns: unix timestamp in ns
-- direct-relations/user-id: multiformats/multihash of multiformats/multicodec encoded public key, seems like ml-dsa-44
+- direct-relations/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
 
 - direct-relations/contact-email: (optional) valid email
 - direct-relations/contact-signal-username: (optional) valid signal id
 - direct-relations/contact-number: (optional) valid international mobile number
 
 - direct-relations/contexts: array of:
-  - direct-relations-context/context-path: array of strings of `/[a-z][a-z0-9\-]/`
+  - direct-relations-context/context-path: array of strings matching `/[a-z][a-z0-9\-]+/`
   - direct-relations-context/relations: array of:
     - direct-relations-rel/type: one of "user" or "uri"
     - direct-relations-rel-uri/uri: uri field
@@ -94,9 +95,9 @@ Fields:
     - direct-relations-rel-uri/comment: optional string.
     - direct-relations-rel-user/user-id: same as direct-relations/user-id
     - direct-relations-rel-user/context-path: optional, defaults to nil which means it is the same as the context path in direct-relations-context/context. Same type as direct-relations-context/context.
-    - direct-relations-rel-user/transitive-depth: optional, defaults to 2
-    - direct-relations-rel-user/subject-glob: optional, defaults to 0, which means no subject glob. non-negative int.
-    - direct-relations-rel-user/object-glob: optional, defaults to 0, which means no object glob. non-negative int.
+    - direct-relations-rel-user/transitive-depth: optional, defaults to 2, max 10.
+    - direct-relations-rel-user/subject-glob: optional, defaults to 0 (no glob), integer 0-10. When non-zero, the subject's context path is treated as a prefix: Alice's context `food` with subject-glob 1 matches Bob's contexts `food.*` up to 1 level deep, expanding Alice's view to include those subcontexts.
+    - direct-relations-rel-user/object-glob: optional, defaults to 0 (no glob), integer 0-10. When non-zero, all of the object's matching subcontexts are collapsed into the subject's context: Alice's context `food` with object-glob 1 collects everything Bob exposes under `food.*` into Alice's single `food` context.
 
 
 ### context-relations-deps
@@ -106,13 +107,14 @@ Produced by a peer.
 Produced inductively from other users' context-relations-deps
 
 Fields:
+- context-relations-deps/version: integer
 - context-relations-deps/timestamp-ns
 - context-relations-deps/user-id: same as direct-relations-context/user-id
 - context-relations-deps/context-path: same as direct-relations-context/context-path
 - context-relations-deps/hops: array of:
   - context-relations-deps-hop/hop: integer 1-10
-  - context-relations-deps-hop/direct-relations-context-addresses: array of multiformats/multihash
-  - context-relations-deps-hop/direct-relations-collection-context-address: array of multiformats/multihash
+  - context-relations-deps-hop/direct-relations-addresses: array of multiformats/multihash — content addresses of the individual direct-relations documents at this hop
+  - context-relations-deps-hop/direct-relations-archive-address: multiformats/multihash — content address of a compressed archive containing all direct-relations documents at this hop
   - context-relations-deps-hop/size: size in bytes of all the content in this hop
 - context-relations-deps/source-context-relations-deps-content-addresses: array of multiformats/multihash
 
@@ -122,6 +124,7 @@ Fields:
 Produced by a peer.
 
 Fields:
+- context-relations-deps-index/version: integer
 - context-relations-deps-index/timestamp-ns
 - context-relations-deps-index/user-id: same as direct-relations-context/user-id
 - context-relations-deps-index/contexts: array of:
@@ -168,6 +171,7 @@ A peer is a user-client but also an IPFS client.
   - Add entries for publishing the newly created context-relations-deps.
   - Add an entry to publish the peer-client's user-info with the updated link to context-relaitons-deps-indexes for all homed users.
   This should operate every 10m, cancelling the previous run if it has gone for too long.
+  The final step — publishing user-info with updated context-relations-deps-index links — is the atomic commit of the new state, so a cancelled run leaves the previous consistent state intact.
 
 
 - user-client: fetch user's context-dependencies-index
@@ -175,6 +179,13 @@ A peer is a user-client but also an IPFS client.
 
 - user-client: fetch direct-relations-collection
   - peer client returns from cache or if necessary fetches
+
+- user-client: collect context
+  - client-side operation: scans the fetched direct-relations documents to build the rendered view for a given context. No peer request needed beyond prior fetches.
+
+### Conflict resolution
+
+When a peer receives a new direct-relations submission, it accepts it if its timestamp-ns is greater than the currently stored document. Latest timestamp wins.
 
 
 ## peer-client
