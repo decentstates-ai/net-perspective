@@ -37,7 +37,7 @@ func (s *Server) RunBatch(ctx context.Context) error {
 }
 
 func (s *Server) processUser(ctx context.Context, u *HomedUser) error {
-	dr, _ := u.DirectRelations()
+	dr, drCID := u.DirectRelations()
 	if dr == nil {
 		return nil // nothing submitted yet
 	}
@@ -98,17 +98,16 @@ func (s *Server) processUser(ctx context.Context, u *HomedUser) error {
 	}
 	u.SetIndexCID(indexCID)
 
-	// Atomic commit: update user-info with the new index address and publish to IPNS.
+	// Atomic commit: publish updated user-info to IPNS.
 	ui := &doc.UserInfo{
-		Version:                         1,
-		TimestampNs:                     now,
-		UserID:                          u.KeyPair.UserID,
-		UserPublicKey:                   u.KeyPair.EncodedPublicKey,
-		ContextRelsDepsIndexIPNSAddress: indexCID,
+		Version:                       1,
+		TimestampNs:                   now,
+		UserID:                        u.KeyPair.UserID,
+		UserPublicKey:                 u.KeyPair.EncodedPublicKey,
+		DirectRelationsContentAddress: drCID,
 	}
-	// Preserve the direct-relations IPNS address if already set.
+	// Preserve peer fields if already set.
 	if prev := u.latestUserInfo; prev != nil {
-		ui.DirectRelationsIPNSAddress = prev.DirectRelationsIPNSAddress
 		ui.TrustedPeers = prev.TrustedPeers
 		ui.PeeredUsers = prev.PeeredUsers
 	}

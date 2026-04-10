@@ -16,8 +16,7 @@ type UserInfo struct {
 	TimestampNs                     int64        `json:"user-info/timestamp-ns"`
 	UserID                          []byte       `json:"user-info/user-id"`
 	UserPublicKey                   []byte       `json:"user-info/user-public-key"`
-	DirectRelationsIPNSAddress      string       `json:"user-info/direct-relations-ipns-address"`
-	ContextRelsDepsIndexIPNSAddress string       `json:"user-info/context-relations-deps-index-ipns-address"`
+	DirectRelationsContentAddress string       `json:"user-info/direct-relations-content-address"`
 	TrustedPeers                    [][]byte     `json:"user-info/trusted-peers"`
 	PeeredUsers                     []PeeredUser `json:"user-info/peered-users"`
 }

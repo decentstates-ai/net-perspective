@@ -33,43 +33,18 @@ field names that match the spec exactly.
 
 ## Field-level deviations
 
-### `context-relations-deps-index-ipns-address` stores a CID, not IPNS
+### ~~`context-relations-deps-index-ipns-address`~~ — removed
 
-In `go/pkg/peer/batch.go`, `processUser` writes:
+This field was left in the spec by mistake and has been removed from both the
+spec and the `UserInfo` type. The index CID is returned by the peer's
+`/status/users/{id}` endpoint; there is no need to carry it in the published
+user-info document.
 
-```go
-ui.ContextRelsDepsIndexIPNSAddress = indexCID  // a plain CID string
-```
+### ~~`direct-relations-ipns-address`~~ → `direct-relations-content-address`
 
-The spec names this field `context-relations-deps-index-ipns-address`, implying
-it should be an IPNS address a client can resolve. In the current implementation
-the index is stored directly in IPFS and its CID is placed in the field. This
-works because the user-info itself is published to IPNS, so a client can
-resolve `user IPNS → user-info → CID → index`. But the field name misleads any
-client that tries to resolve it as IPNS.
-
-**Resolution options:**
-- Rename the spec/field to `context-relations-deps-index-address` (simpler, remove IPNS for index).
-- Publish the index to a second IPNS key per user and store the IPNS address.
-
-The second option adds an IPNS publish per user per batch round; the first is
-simpler and aligns with how the user-info lookup chain already works.
-
-### `direct-relations-ipns-address` is never populated
-
-`HomedUser.latestUserInfo.DirectRelationsIPNSAddress` is preserved from the
-previous state in `processUser` but is never actually set anywhere. The DR
-envelope is stored to IPFS (CID returned), but there is no dedicated IPNS key
-for DRs. The field is always empty.
-
-The spec's intent is that a client given a user's IPNS address can find their
-latest DR. Currently this chain only works one level (IPNS → user-info → index),
-not through to the DR.
-
-**Resolution options:**
-- Publish the DR CID under a second IPNS key per user and populate the field.
-- Fold the DR CID into user-info directly (add `direct-relations-address` field)
-  and drop the separate IPNS for DRs.
+Renamed in spec and implementation. `processUser` now populates
+`DirectRelationsContentAddress` with the current DR CID during each batch run,
+so the published user-info carries an accurate pointer to the latest DR.
 
 ---
 
@@ -195,13 +170,14 @@ formally added to the spec or gated behind an admin interface.
 
 ## Priority order for closing gaps
 
-1. **IPNS field naming / DR address** — protocol-level ambiguity; resolve before
-   any external clients are built.
-2. **Glob context mapping** — core feature, affects what contexts users can
+1. **Glob context mapping** — core feature, affects what contexts users can
    meaningfully express.
-3. **Client-side collect command** — needed to make the system usable end-to-end.
-4. **User/peer discovery** — required for a real multi-operator network.
-5. **Archive addresses** — can be phased in; low value until datasets are large.
-6. **DAG-based batch** — parallelism improvement; correctness is fine without it.
-7. **Size limits / weight budgets** — operator and UX concern, not blocking.
-8. **Data seeding** — kubo's implicit retention partially covers this.
+2. **Client-side collect command** — needed to make the system usable end-to-end.
+3. **User/peer discovery** — required for a real multi-operator network.
+4. **Archive addresses** — can be phased in; low value until datasets are large.
+5. **DAG-based batch** — parallelism improvement; correctness is fine without it.
+6. **Size limits / weight budgets** — operator and UX concern, not blocking.
+7. **Data seeding** — kubo's implicit retention partially covers this.
+
+_The IPNS field naming issues have been resolved: `context-relations-deps-index-ipns-address`
+removed, `direct-relations-ipns-address` renamed to `direct-relations-content-address`._

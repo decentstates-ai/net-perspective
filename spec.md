@@ -65,8 +65,7 @@ Within a signed envelope:
 - user-info/timestamp-ns: unix timestamp in ns
 - user-info/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
 - user-info/user-public-key: multiformats/multicodec encoded public key, ml-dsa-44
-- user-info/direct-relations-ipns-address
-- user-info/context-relations-deps-index-ipns-address
+- user-info/direct-relations-content-address
 - user-info/trusted-peers: array of user-ids the user trusts to peer them.
 - user-info/peered-users: map of user-id ->
   - user-info-peered-user/user-id
