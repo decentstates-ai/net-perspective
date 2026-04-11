@@ -106,66 +106,32 @@
   [server doc]
   (ipfs/add (:ipfs server) (codec/marshal doc)))
 
-(defn- fetch-bytes
-  "Fetches raw bytes for cid from IPFS."
-  {:malli/schema [:=> [:cat #'schema/PeerServer #'schema/Cid] #'schema/ContentBytes]}
-  [server cid]
-  (ipfs/cat (:ipfs server) cid))
-
 ;; ---------------------------------------------------------------------------
 ;; Fetch context deps for a related user
 
-(defn- fetch-deps-from-index
-  "Given serialised index bytes and a target context path, fetches and returns
-   [deps-map deps-cid] using fetch-fn (cid → bytes)."
-  [index-bytes target-path fetch-fn]
-  (let [deps-cid (find-deps-cid (codec/unmarshal index-bytes) target-path)]
-    (when deps-cid
-      [(codec/unmarshal (fetch-fn deps-cid)) deps-cid])))
-(m/=> fetch-deps-from-index
-      [:=> [:cat #'schema/ContentBytes #'schema/ContextPath fn?]
-       [:maybe [:tuple #'schema/ContextRelationsDeps #'schema/Cid]]])
-
-(defn- fetch-local-user-context-deps
-  "Fetches context deps for a locally-homed user."
-  [server related-user target-path]
-  (when-let [index-cid (not-empty (:index-cid related-user))]
-    (fetch-deps-from-index (fetch-bytes server index-cid) target-path
-                           #(fetch-bytes server %))))
-(m/=> fetch-local-user-context-deps
-      [:=> [:cat #'schema/PeerServer #'schema/HomedUser #'schema/ContextPath]
-       [:maybe [:tuple #'schema/ContextRelationsDeps #'schema/Cid]]])
-
-(defn- fetch-remote-user-context-deps
-  "Fetches context deps for a user homed on a remote peer via HTTP."
-  [peer-url ^bytes user-id target-path]
-  (let [hex-id  (util/bytes->hex user-id)
-        st-resp (try (http/get (str peer-url "/status/users/" hex-id) {:as :json})
-                     (catch Exception e
-                       (println (str "batch: remote status fetch failed (" peer-url "): " (.getMessage e)))
-                       nil))]
-    (when (and st-resp (= 200 (:status st-resp)))
-      ;; clj-http keywordizes JSON response keys by default.
-      (let [index-cid (get-in st-resp [:body :index-cid])]
-        (when (seq index-cid)
-          (let [fetch-fn #(:body (http/get (str peer-url "/cid/" %) {:as :byte-array}))]
-            (fetch-deps-from-index (fetch-fn index-cid) target-path fetch-fn)))))))
-(m/=> fetch-remote-user-context-deps
-      [:=> [:cat #'schema/PeerUrl #'schema/UserId #'schema/ContextPath]
-       [:maybe [:tuple #'schema/ContextRelationsDeps #'schema/Cid]]])
-
-(defn- fetch-user-context-deps
-  "Resolves a related user's context-deps, trying local first then remote.
+(defn- fetch-user-deps
+  "Returns [deps-map deps-cid] for a related user's context, or nil.
+   Tries local state first (direct IPFS access), then remote peer via HTTP.
    rel-user-id may be raw bytes or a base64 string (JSON round-trip)."
   [server rel-user-id target-path]
-  (let [uid        (util/ensure-bytes rel-user-id)
-        local-user (state/get-user server uid)]
-    (or (when local-user
-          (fetch-local-user-context-deps server local-user target-path))
-        (when-let [peer-url (some-> (:registry server)
-                                    (registry/lookup uid))]
-          (fetch-remote-user-context-deps peer-url uid target-path)))))
-(m/=> fetch-user-context-deps
+  (let [uid      (util/ensure-bytes rel-user-id)
+        fetch-fn (fn [index-cid fetch-cid]
+                   (when-let [ic (not-empty index-cid)]
+                     (when-let [dc (find-deps-cid (codec/unmarshal (fetch-cid ic)) target-path)]
+                       [(codec/unmarshal (fetch-cid dc)) dc])))]
+    (or
+     (when-let [user (state/get-user server uid)]
+       (fetch-fn (:index-cid user) #(ipfs/cat (:ipfs server) %)))
+     (when-let [peer-url (some-> (:registry server) (registry/lookup uid))]
+       (try
+         (let [resp (http/get (str peer-url "/status/users/" (util/bytes->hex uid)) {:as :json})]
+           (when (= 200 (:status resp))
+             (fetch-fn (get-in resp [:body :index-cid])
+                       #(:body (http/get (str peer-url "/cid/" %) {:as :byte-array})))))
+         (catch Exception e
+           (println (str "batch: remote status fetch failed (" peer-url "): " (.getMessage e)))
+           nil))))))
+(m/=> fetch-user-deps
       [:=> [:cat #'schema/PeerServer [:or #'schema/UserId #'schema/Base64String] #'schema/ContextPath]
        [:maybe [:tuple #'schema/ContextRelationsDeps #'schema/Cid]]])
 
@@ -188,7 +154,7 @@
            (if (>= current-hop max-depth)
              [hops srcs]
              (if-let [[related-deps deps-cid]
-                      (try (fetch-user-context-deps server rel-user-id target-path)
+                      (try (fetch-user-deps server rel-user-id target-path)
                            (catch Exception e
                              (println (str "batch: dep fetch failed: " (.getMessage e)))
                              nil))]
@@ -208,7 +174,7 @@
   [server user context-path now]
   (let [dr      (:latest-dr user)
         dr-cid  (:latest-dr-cid user)
-        dr-size (try (alength ^bytes (fetch-bytes server dr-cid))
+        dr-size (try (alength ^bytes (ipfs/cat (:ipfs server) dr-cid))
                      (catch Exception _ 0))
         hop1    (make-hop1 dr-cid dr-size)
         [extra-hops src-cids] (try (fetch-transitive-deps server dr context-path 1)
