@@ -13,6 +13,7 @@
 
 (defn- make-hop1
   "Builds the first-hop entry representing a user's own DR."
+  {:malli/schema [:=> [:cat :string :int] :map]}
   [dr-cid dr-size]
   {"crd-hop/hop"             1
    "crd-hop/dr-addresses"    [dr-cid]
@@ -22,6 +23,7 @@
 (defn- adjust-hops
   "Returns hops from related-deps with hop counts incremented by current-hop,
    dropping any that would exceed 10."
+  {:malli/schema [:=> [:cat :int :map] [:vector :map]]}
   [current-hop related-deps]
   (reduce
    (fn [acc h]
@@ -34,6 +36,7 @@
 
 (defn- make-crd
   "Builds a ContextRelationsDeps document from its components."
+  {:malli/schema [:=> [:cat bytes? [:vector :string] :map [:vector :map] [:vector :string]] :map]}
   [user-id context-path hop1 extra-hops src-cids]
   {"crd/version"          1
    "crd/timestamp-ns"     (System/nanoTime)
@@ -44,6 +47,7 @@
 
 (defn- find-deps-cid
   "Returns the crd-address for target-path in a parsed index map, or nil."
+  {:malli/schema [:=> [:cat :map [:vector :string]] [:maybe :string]]}
   [index target-path]
   (->> (get index "crd-idx/contexts" [])
        (filter #(= (get % "crd-idx-ctx/path") target-path))
@@ -52,6 +56,7 @@
 
 (defn- make-index-ctx-entry
   "Builds one ContextRelationsDepsIndexContext entry from a computed deps doc."
+  {:malli/schema [:=> [:cat [:vector :string] :map :string] :map]}
   [cpath deps deps-cid]
   {"crd-idx-ctx/path"        cpath
    "crd-idx-ctx/crd-address" deps-cid
@@ -60,6 +65,7 @@
 
 (defn- make-index-doc
   "Builds a ContextRelationsDepsIndex document."
+  {:malli/schema [:=> [:cat bytes? :int [:vector :map]] :map]}
   [user-id now index-contexts]
   {"crd-idx/version"      1
    "crd-idx/timestamp-ns" now
@@ -68,6 +74,7 @@
 
 (defn- make-user-info-doc
   "Builds a UserInfo document."
+  {:malli/schema [:=> [:cat :map :int :string] :map]}
   [kp now dr-cid]
   {"user/version"         1
    "user/timestamp-ns"    now
@@ -202,6 +209,7 @@
 
 (defn run-batch!
   "Runs one batch update round for all homed users."
+  {:malli/schema [:=> [:cat :map] :nil]}
   [server]
   (doseq [user (state/all-users server)]
     (try (process-user! server user)

@@ -27,6 +27,7 @@
 
 (defn encode-public-key
   "Returns multicodec-encoded public key: varint(0x1203) ++ raw-pubkey-bytes."
+  {:malli/schema [:=> [:cat bytes?] bytes?]}
   ^bytes [^bytes raw-pubkey]
   (let [prefix ml-dsa-44-codec-varint
         out    (byte-array (+ (alength prefix) (alength raw-pubkey)))]
@@ -37,6 +38,7 @@
 (defn decode-public-key
   "Strips the multicodec varint prefix and returns the raw public key bytes.
    Throws if the prefix does not match ML-DSA-44 (0x1203)."
+  {:malli/schema [:=> [:cat bytes?] bytes?]}
   ^bytes [^bytes encoded]
   (let [prefix ml-dsa-44-codec-varint
         plen   (alength prefix)]
@@ -56,6 +58,7 @@
 
 (defn compute-user-id
   "Returns the multihash(SHA2-256) of the encoded public key as a byte array."
+  {:malli/schema [:=> [:cat bytes?] bytes?]}
   ^bytes [^bytes encoded-pubkey]
   (let [digest (.digest (MessageDigest/getInstance "SHA-256") encoded-pubkey)
         out    (byte-array (+ 2 (alength digest)))]
@@ -80,6 +83,7 @@
      :raw-public-key      – 1312-byte raw public key
      :encoded-public-key  – multicodec-prefixed public key
      :user-id             – SHA2-256 multihash of encoded public key"
+  {:malli/schema [:=> [:cat] :map]}
   []
   (let [kp   (.generateKeyPair (make-key-pair-generator))
         priv ^MLDSAPrivateKeyParameters (.getPrivate kp)
@@ -96,6 +100,7 @@
 (defn key-pair-from-seed
   "Reconstructs the full key pair from a 32-byte seed.
    MLDSAPrivateKeyParameters can be built directly from the seed."
+  {:malli/schema [:=> [:cat bytes?] :map]}
   [^bytes seed]
   (let [priv (MLDSAPrivateKeyParameters. MLDSAParameters/ml_dsa_44 seed)
         pub  (.getPublicKeyParameters priv)
@@ -113,6 +118,7 @@
 (defn sign
   "Signs msg-bytes with the private key. Returns signature bytes.
    Uses update(byte[], 0, len) + generateSignature() — the BC 1.80 API."
+  {:malli/schema [:=> [:cat :any bytes?] bytes?]}
   ^bytes [^MLDSAPrivateKeyParameters priv-params ^bytes msg]
   (let [signer (doto (MLDSASigner.)
                  (.init true priv-params)
@@ -121,6 +127,7 @@
 
 (defn verify
   "Returns true if signature is valid for msg under the encoded public key."
+  {:malli/schema [:=> [:cat bytes? bytes? bytes?] :boolean]}
   [^bytes encoded-pubkey ^bytes msg ^bytes signature]
   (let [raw    (decode-public-key encoded-pubkey)
         params (MLDSAPublicKeyParameters. MLDSAParameters/ml_dsa_44 raw)

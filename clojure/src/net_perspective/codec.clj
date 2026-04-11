@@ -17,10 +17,12 @@
 (defn marshal
   "Serialise a Clojure map to JCS-canonical JSON bytes.
    Byte arrays are base64-encoded before serialisation."
+  {:malli/schema [:=> [:cat :any] bytes?]}
   ^bytes [doc]
   (.getEncodedUTF8 (JsonCanonicalizer. (json/generate-string (bytes->b64-map doc)))))
 
 (defn unmarshal
   "Deserialise JCS JSON bytes to a Clojure map with string keys."
+  {:malli/schema [:=> [:cat bytes?] :map]}
   [^bytes data]
   (json/parse-string (String. data "UTF-8")))

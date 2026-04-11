@@ -119,6 +119,7 @@
 
 (defn validate!
   "Validates doc against schema. Returns doc on success, throws on failure."
+  {:malli/schema [:=> [:cat :any :any] :any]}
   [schema doc]
   (when-not (m/validate schema doc)
     (throw (ex-info "document validation failed"
@@ -132,6 +133,7 @@
   "Signs content-map with kp and returns an envelope map (string keys).
    content-map must be a Clojure map; it is marshalled to JCS bytes for signing.
    kp must have :private-params, :encoded-public-key, and :user-id."
+  {:malli/schema [:=> [:cat :map :map] :map]}
   [content-map kp]
   (let [content-bytes (codec/marshal content-map)
         sig           (crypto/sign (:private-params kp) content-bytes)]
@@ -145,6 +147,7 @@
    Throws if the signature is invalid or user-id is inconsistent.
    Accepts envelopes that have been through a JSON round-trip (byte
    array fields may be base64 strings)."
+  {:malli/schema [:=> [:cat :map] :any]}
   [envelope]
   (let [enc-pubkey (util/ensure-bytes (get envelope "env/user-public-key"))
         user-id    (util/ensure-bytes (get envelope "env/user-id"))

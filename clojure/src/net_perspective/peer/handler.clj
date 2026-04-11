@@ -114,6 +114,7 @@
 
 (defn user-status
   "Returns a status map for a user-map (used by handlers and tests)."
+  {:malli/schema [:=> [:cat :map] :map]}
   [user]
   (let [kp (:key-pair user)
         dr (:latest-dr user)]
@@ -146,7 +147,9 @@
 ;; ---------------------------------------------------------------------------
 ;; Router
 
-(defn make-handler [server]
+(defn make-handler
+  {:malli/schema [:=> [:cat :map] fn?]}
+  [server]
   (ring/ring-handler
    (ring/router
     [["/submit"              {:post {:handler #(handle-submit server %)}}]
