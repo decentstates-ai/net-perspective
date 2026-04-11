@@ -5,20 +5,23 @@
             [net-perspective.schema :as schema]
             [net-perspective.ipfs.client :as ipfs]
             [net-perspective.peer.state :as state]
-            [net-perspective.peer.registry :as registry]))
+            [net-perspective.peer.registry :as registry])
+  (:import [java.io ByteArrayOutputStream]
+           [java.util.zip ZipOutputStream ZipEntry]))
 
 ;; ---------------------------------------------------------------------------
 ;; Pure data constructors
 
 (defn- make-hop1
-  "Builds the first-hop entry representing a user's own DR."
-  [dr-cid dr-size]
+  "Builds the first-hop entry representing a user's own DR.
+   archive-cid is the CID of a ZIP archive containing the DR bytes."
+  [dr-cid archive-cid dr-size]
   {"crd-hop/hop"             1
    "crd-hop/dr-addresses"    [dr-cid]
-   "crd-hop/archive-address" dr-cid
+   "crd-hop/archive-address" archive-cid
    "crd-hop/size"            dr-size})
 (m/=> make-hop1
-      [:=> [:cat #'schema/Cid :int] #'schema/ContextRelationsDepsHop])
+      [:=> [:cat #'schema/Cid #'schema/Cid :int] #'schema/ContextRelationsDepsHop])
 
 (defn- adjust-hops
   "Returns hops with hop counts incremented by current-hop, dropping any that
@@ -104,6 +107,18 @@
   (ipfs/add (:ipfs server) (schema/marshal-document document)))
 (m/=> add-document! [:=> [:cat #'schema/PeerServer :any] #'schema/Cid])
 
+(defn- make-zip-archive
+  "Creates a ZIP archive from entries, each [filename bytes].
+   Returns the archive as a byte array."
+  ^bytes [entries]
+  (let [baos (ByteArrayOutputStream.)]
+    (with-open [zos (ZipOutputStream. baos)]
+      (doseq [[name ^bytes data] entries]
+        (.putNextEntry zos (ZipEntry. ^String name))
+        (.write zos data)
+        (.closeEntry zos)))
+    (.toByteArray baos)))
+
 ;; ---------------------------------------------------------------------------
 ;; Fetch context deps for a related user
 
@@ -170,11 +185,16 @@
 
 (defn- compute-deps
   [server user context-path now]
-  (let [dr      (:latest-dr user)
-        dr-cid  (:latest-dr-cid user)
-        dr-size (try (alength ^bytes (ipfs/cat (:ipfs server) dr-cid))
-                     (catch Exception _ 0))
-        hop1    (make-hop1 dr-cid dr-size)
+  (let [dr       (:latest-dr user)
+        dr-cid   (:latest-dr-cid user)
+        dr-bytes (try (ipfs/cat (:ipfs server) dr-cid)
+                      (catch Exception _ nil))
+        dr-size  (if dr-bytes (alength ^bytes dr-bytes) 0)
+        archive-cid (try
+                      (let [archive (make-zip-archive [[dr-cid dr-bytes]])]
+                        (ipfs/add (:ipfs server) archive))
+                      (catch Exception _ dr-cid)) ; fall back to dr-cid on failure
+        hop1    (make-hop1 dr-cid archive-cid dr-size)
         [extra-hops src-cids] (try (fetch-transitive-deps server dr context-path 1)
                                    (catch Exception e
                                      (println (str "batch: transitive dep fetch failed: " (.getMessage e)))

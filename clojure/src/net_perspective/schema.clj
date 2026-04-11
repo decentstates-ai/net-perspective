@@ -275,7 +275,8 @@
     [:ipfs     :any]                     ; ipfs.client/Store implementation
     [:registry [:maybe :any]]            ; peer.registry/Registry or nil
     [:self-kp  KeyPair]
-    [:addr     :string]]))
+    [:addr     :string]
+    [:var-dir  [:maybe :any]]]))
 
 ;; ---------------------------------------------------------------------------
 ;; Validation

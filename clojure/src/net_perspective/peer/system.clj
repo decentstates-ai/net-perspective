@@ -19,18 +19,19 @@
   "Configuration map for start!."
   (m/schema
    [:map
-    [:ipfs-addr  :string]   ; kubo API address, e.g. "localhost:5001"
-    [:listen-port :int]     ; HTTP listen port
-    [:self-kp    #'schema/KeyPair]]))
+    [:ipfs-addr  :string]            ; kubo API address, e.g. "localhost:5001"
+    [:listen-port :int]              ; HTTP listen port
+    [:self-kp    #'schema/KeyPair]
+    [:var-dir    {:optional true} [:maybe :string]]]))  ; state cache directory
 
 (defn start!
   "Starts the peer server system. Returns a closeable whose deref is the
    PeerServer. Closing tears down HTTP, scheduler, and IPFS connection
    in reverse order."
-  [{:keys [ipfs-addr listen-port self-kp]}]
+  [{:keys [ipfs-addr listen-port self-kp var-dir]}]
   (let [ipfs-c    (ipfs/new-client ipfs-addr)
         reg       (registry/new-registry)
-        server    (-> (state/new-server @ipfs-c listen-port self-kp)
+        server    (-> (state/new-server @ipfs-c (str listen-port) self-kp var-dir)
                       (assoc :registry reg))
         stop-batch (scheduler/run-scheduler! server)
         jetty-srv  (jetty/run-jetty (handler/make-handler server)

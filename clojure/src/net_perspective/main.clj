@@ -81,7 +81,8 @@
     (println (str "listening on " listen))
     (with-open [sys (peer-system/start! {:ipfs-addr   ipfs
                                          :listen-port port
-                                         :self-kp     kp})]
+                                         :self-kp     kp
+                                         :var-dir     (str dir "/state")})]
       (.addShutdownHook (Runtime/getRuntime)
                         (Thread. ^Runnable #(.close sys)))
       (util/wait-forever @sys))))

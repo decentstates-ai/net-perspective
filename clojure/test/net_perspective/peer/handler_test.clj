@@ -18,7 +18,7 @@
 (defn- make-server
   "Creates a peer Server with a MemStore for IPFS."
   [self-kp]
-  (state/->Server (atom {:users {}}) @(ipfs/new-mem-store) nil self-kp ":0"))
+  (state/new-server @(ipfs/new-mem-store) ":0" self-kp))
 
 (defn- add-user! [server kp]
   (state/add-homed-user! server {:key-pair      kp
