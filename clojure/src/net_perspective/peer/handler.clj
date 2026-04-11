@@ -3,9 +3,7 @@
   (:require [reitit.ring :as ring]
             [cheshire.core :as json]
             [malli.core :as m]
-            [net-perspective.codec :as codec]
             [net-perspective.schema :as schema]
-            [net-perspective.util :as util]
             [net-perspective.peer.state :as state]
             [net-perspective.ipfs.client :as ipfs]))
 
@@ -29,19 +27,16 @@
    :body    msg})
 (m/=> error-resp [:=> [:cat :int :string] #'schema/RingResponse])
 
-(defn- parse-body
-  {:malli/schema [:=> [:cat :map] [:maybe :map]]}
-  [req]
+(defn- parse-body [req]
   (some-> (:body req) slurp (json/parse-string))) ; string keys
+(m/=> parse-body [:=> [:cat :map] [:maybe :map]])
 
 ;; ---------------------------------------------------------------------------
 ;; POST /submit
 ;;
 ;; Uses a sentinel exception to short-circuit validation with an HTTP response.
 
-(defn- submit-error
-  {:malli/schema [:=> [:cat :int :string] :never]}
-  [status msg]
+(defn- submit-error [status msg]
   (throw (ex-info msg {::resp (error-resp status msg)})))
 
 (defn- parse-submit-body [req]
@@ -56,9 +51,9 @@
       [:=> [:cat :map] [:tuple #'schema/Envelope #'schema/Envelope]])
 
 (defn- unwrap-submit-envelopes [ui-env dr-env]
-  (let [ui (try (schema/unwrap ui-env)
+  (let [ui (try (schema/unwrap-envelope ui-env)
                 (catch Exception e (submit-error 400 (str "invalid user-info: " (.getMessage e)))))
-        dr (try (schema/unwrap dr-env)
+        dr (try (schema/unwrap-envelope dr-env)
                 (catch Exception e (submit-error 400 (str "invalid direct-relations: " (.getMessage e)))))]
     [ui dr]))
 (m/=> unwrap-submit-envelopes
@@ -66,9 +61,9 @@
        [:tuple #'schema/UserInfo #'schema/DirectRelations]])
 
 (defn- validate-submit-ids [ui dr dr-env]
-  (let [ui-uid    (util/ensure-bytes (get ui "user/user-id"))
-        dr-uid    (util/ensure-bytes (get dr "dr/user-id"))
-        dr-signer (util/ensure-bytes (get dr-env "env/user-id"))]
+  (let [ui-uid    (schema/ensure-bytes (get ui "user/user-id"))
+        dr-uid    (schema/ensure-bytes (get dr "dr/user-id"))
+        dr-signer (schema/ensure-bytes (get dr-env "env/user-id"))]
     (when-not (java.util.Arrays/equals ^bytes ui-uid ^bytes dr-uid)
       (submit-error 400 "user-id mismatch between envelopes"))
     (when-not (java.util.Arrays/equals ^bytes dr-uid ^bytes dr-signer)
@@ -78,10 +73,9 @@
       [:=> [:cat #'schema/UserInfo #'schema/DirectRelations #'schema/Envelope]
        #'schema/UserId])
 
-(defn- add-doc!
-  {:malli/schema [:=> [:cat #'schema/PeerServer :any] #'schema/Cid]}
-  [server doc]
-  (ipfs/add (:ipfs server) (codec/marshal doc)))
+(defn- add-document! [server document]
+  (ipfs/add (:ipfs server) (schema/marshal-document document)))
+(m/=> add-document! [:=> [:cat #'schema/PeerServer :any] #'schema/Cid])
 
 (defn- store-submit! [server user-id dr ui-env dr-env]
   (let [user (state/get-user server user-id)]
@@ -89,8 +83,8 @@
     (when (<= (get dr "dr/timestamp-ns" 0)
               (state/dr-timestamp server user-id))
       (submit-error 409 "stale submission"))
-    (let [dr-cid (add-doc! server dr-env)
-          ui-cid (add-doc! server ui-env)]
+    (let [dr-cid (add-document! server dr-env)
+          ui-cid (add-document! server ui-env)]
       (ipfs/publish-ipns (:ipfs server) (:ipns-key-name user) ui-cid)
       (state/store-dr! server user-id dr dr-cid)
       (json-resp {"cid" dr-cid}))))
@@ -142,15 +136,15 @@
 
 (defn user-status
   "Returns a status map for a user-map (used by handlers and tests)."
-  {:malli/schema [:=> [:cat #'schema/HomedUser] :map]}
   [user]
   (let [kp (:key-pair user)
         dr (:latest-dr user)]
-    {"user-id"       (util/bytes->hex (:user-id kp))
+    {"user-id"       (schema/bytes->hex (:user-id kp))
      "index-cid"     (or (:index-cid user) "")
      "dr-cid"        (or (:latest-dr-cid user) "")
      "context-count" (count (get dr "dr/contexts" []))
      "timestamp-ns"  (get dr "dr/timestamp-ns" 0)}))
+(m/=> user-status [:=> [:cat #'schema/HomedUser] :map])
 
 ;; ---------------------------------------------------------------------------
 ;; GET /status/users
@@ -165,7 +159,7 @@
 (defn- handle-status-user [server req]
   (let [hex-id (get-in req [:path-params :userID])]
     (try
-      (let [user-id (util/hex->bytes hex-id)
+      (let [user-id (schema/hex->bytes hex-id)
             user    (state/get-user server user-id)]
         (if user
           (json-resp (user-status user))
@@ -177,9 +171,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Router
 
-(defn make-handler
-  {:malli/schema [:=> [:cat #'schema/PeerServer] fn?]}
-  [server]
+(defn make-handler [server]
   (ring/ring-handler
    (ring/router
     [["/submit"              {:post {:handler #(handle-submit server %)}}]
@@ -188,3 +180,4 @@
      ["/status/users"        {:get  {:handler #(handle-status-users server %)}}]
      ["/status/users/:userID" {:get {:handler #(handle-status-user server %)}}]])
    (ring/create-default-handler)))
+(m/=> make-handler [:=> [:cat #'schema/PeerServer] fn?])

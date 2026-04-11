@@ -43,12 +43,12 @@
 (defn- make-submit-body
   ([kp] (make-submit-body kp (make-dr kp)))
   ([kp dr]
-   (let [dr-env (schema/wrap dr kp)
+   (let [dr-env (schema/wrap-envelope dr kp)
          ui     {"user/version"         1
                  "user/timestamp-ns"     (get dr "dr/timestamp-ns")
                  "user/user-id"          (:user-id kp)
                  "user/user-public-key"  (:encoded-public-key kp)}
-         ui-env (schema/wrap ui kp)]
+         ui-env (schema/wrap-envelope ui kp)]
      {"user-env"        ui-env
       "dr-env" dr-env})))
 
@@ -102,12 +102,12 @@
         _        (add-user! srv kp-real)
         ;; DR content for kp-real but signed by kp-other.
         dr       (make-dr kp-real)
-        dr-env   (schema/wrap dr kp-other)
+        dr-env   (schema/wrap-envelope dr kp-other)
         ui       {"user/version"         1
                   "user/timestamp-ns"     (get dr "dr/timestamp-ns")
                   "user/user-id"          (:user-id kp-real)
                   "user/user-public-key"  (:encoded-public-key kp-real)}
-        ui-env   (schema/wrap ui kp-real)
+        ui-env   (schema/wrap-envelope ui kp-real)
         body     {"user-env"        ui-env
                   "dr-env" dr-env}
         h        (handler/make-handler srv)

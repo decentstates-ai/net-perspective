@@ -107,17 +107,17 @@
     kp))
 
 (defn- submit! [server kp dr-map]
-  (let [dr-env (schema/wrap dr-map kp)
+  (let [dr-env (schema/wrap-envelope dr-map kp)
         ui     {"user/version"         1
                 "user/timestamp-ns"     (get dr-map "dr/timestamp-ns")
                 "user/user-id"          (:user-id kp)
                 "user/user-public-key"  (:encoded-public-key kp)}
-        ui-env (schema/wrap ui kp)]
+        ui-env (schema/wrap-envelope ui kp)]
     ;; Call the handler directly rather than over HTTP for speed.
     (let [user-id (:user-id kp)
-          dr-bytes (schema/marshal dr-env)
+          dr-bytes (schema/marshal-document dr-env)
           dr-cid   (ipfs/add (:ipfs server) dr-bytes)
-          ui-bytes (schema/marshal ui-env)
+          ui-bytes (schema/marshal-document ui-env)
           ui-cid   (ipfs/add (:ipfs server) ui-bytes)]
       (ipfs/publish-ipns (:ipfs server) (str "user-" (schema/b64-encode user-id)) ui-cid)
       (state/store-dr! server user-id dr-map dr-cid))))
@@ -131,7 +131,7 @@
   (let [user    (state/get-user server (:user-id kp))
         idx-cid (:index-cid user)]
     (when (seq idx-cid)
-      (schema/unmarshal (ipfs/cat (:ipfs server) idx-cid)))))
+      (schema/unmarshal-document (ipfs/cat (:ipfs server) idx-cid)))))
 
 (defn- fetch-deps [server kp context-path]
   (when-let [index (fetch-index server kp)]
@@ -140,7 +140,7 @@
                                       (vec context-path)))
                           first)]
       (let [deps-cid (get entry "crd-idx-ctx/crd-address")]
-        (schema/unmarshal (ipfs/cat (:ipfs server) deps-cid))))))
+        (schema/unmarshal-document (ipfs/cat (:ipfs server) deps-cid))))))
 
 (defn- all-dr-cids [deps]
   (->> (get deps "crd/hops" [])

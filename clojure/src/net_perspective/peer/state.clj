@@ -1,8 +1,7 @@
 (ns net-perspective.peer.state
   "Atom-backed server state. All mutations are pure swap! calls."
   (:require [malli.core :as m]
-            [net-perspective.schema :as schema]
-            [net-perspective.util :as util]))
+            [net-perspective.schema :as schema]))
 
 ;; ---------------------------------------------------------------------------
 ;; Server record
@@ -14,9 +13,9 @@
                    addr])   ; listen address string
 
 (defn new-server
-  {:malli/schema [:=> [:cat :any :string #'schema/KeyPair] #'schema/PeerServer]}
   [ipfs-client listen-addr self-kp]
   (->Server (atom {:users {}}) ipfs-client nil self-kp listen-addr))
+(m/=> new-server [:=> [:cat :any :string #'schema/KeyPair] #'schema/PeerServer])
 
 ;; ---------------------------------------------------------------------------
 ;; User map shape:
@@ -29,28 +28,28 @@
 
 (defn add-homed-user!
   "Registers a user the peer will home."
-  {:malli/schema [:=> [:cat #'schema/PeerServer #'schema/HomedUser] :nil]}
   [server user-map]
-  (let [uid (util/b64-encode (get-in user-map [:key-pair :user-id]))]
+  (let [uid (schema/b64-encode (get-in user-map [:key-pair :user-id]))]
     (swap! (:state server) assoc-in [:users uid] user-map)))
+(m/=> add-homed-user! [:=> [:cat #'schema/PeerServer #'schema/HomedUser] :nil])
 
 (defn get-user
   "Returns the user-map for user-id bytes, or nil."
   [server ^bytes user-id]
-  (get-in @(:state server) [:users (util/b64-encode user-id)]))
+  (get-in @(:state server) [:users (schema/b64-encode user-id)]))
 (m/=> get-user [:=> [:cat #'schema/PeerServer #'schema/UserId] [:maybe #'schema/HomedUser]])
 
 (defn all-users
   "Returns a snapshot seq of all user-maps."
-  {:malli/schema [:=> [:cat #'schema/PeerServer] [:sequential #'schema/HomedUser]]}
   [server]
   (vals (get-in @(:state server) [:users])))
+(m/=> all-users [:=> [:cat #'schema/PeerServer] [:sequential #'schema/HomedUser]])
 
 (defn dr-timestamp
   "Returns the timestamp-ns of the stored direct-relations, or 0."
   [server ^bytes user-id]
   (get-in @(:state server)
-          [:users (util/b64-encode user-id) :latest-dr "dr/timestamp-ns"]
+          [:users (schema/b64-encode user-id) :latest-dr "dr/timestamp-ns"]
           0))
 (m/=> dr-timestamp [:=> [:cat #'schema/PeerServer #'schema/UserId] :int])
 
@@ -58,7 +57,7 @@
   "Updates a user's latest direct-relations and DR CID.
    Returns :updated if stored, :stale if the timestamp is not newer."
   [server ^bytes user-id dr-map dr-cid]
-  (let [uid    (util/b64-encode user-id)
+  (let [uid    (schema/b64-encode user-id)
         ts-new (get dr-map "dr/timestamp-ns" 0)]
     (if (> ts-new (dr-timestamp server user-id))
       (do (swap! (:state server)
@@ -75,5 +74,5 @@
   "Records the latest context-relations-deps-index CID for a user."
   [server ^bytes user-id index-cid]
   (swap! (:state server)
-         assoc-in [:users (util/b64-encode user-id) :index-cid] index-cid))
+         assoc-in [:users (schema/b64-encode user-id) :index-cid] index-cid))
 (m/=> set-index-cid! [:=> [:cat #'schema/PeerServer #'schema/UserId #'schema/Cid] :any])

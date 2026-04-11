@@ -28,8 +28,8 @@
 (deftest test-marshal-roundtrip
   (let [kp  (make-kp)
         doc (sample-dr kp)
-        bs  (schema/marshal doc)
-        out (schema/unmarshal bs)]
+        bs  (schema/marshal-document doc)
+        out (schema/unmarshal-document bs)]
     (testing "unmarshal returns a map"
       (is (map? out)))
     (testing "version survives roundtrip"
@@ -40,8 +40,8 @@
 (deftest test-marshal-is-canonical
   (let [kp  (make-kp)
         doc {"b" 2 "a" 1 "z" 0}
-        b1  (schema/marshal doc)
-        b2  (schema/marshal {"z" 0 "b" 2 "a" 1})]
+        b1  (schema/marshal-document doc)
+        b2  (schema/marshal-document {"z" 0 "b" 2 "a" 1})]
     (testing "key order does not affect output"
       (is (Arrays/equals ^bytes b1 ^bytes b2)))))
 
@@ -51,8 +51,8 @@
 (deftest test-wrap-unwrap-roundtrip
   (let [kp      (make-kp)
         content (sample-dr kp)
-        env     (schema/wrap content kp)
-        decoded (schema/unwrap env)]
+        env     (schema/wrap-envelope content kp)
+        decoded (schema/unwrap-envelope env)]
     (testing "unwrapped content matches original fields"
       (is (= 1 (get decoded "dr/version")))
       (is (= ["food"]
@@ -63,32 +63,32 @@
   (let [kp1     (make-kp)
         kp2     (make-kp)
         content (sample-dr kp1)
-        env     (schema/wrap content kp1)
+        env     (schema/wrap-envelope content kp1)
         ;; splice in kp2's public key — user-id will mismatch
         bad-env (assoc env
                        "env/user-public-key" (:encoded-public-key kp2)
                        "env/user-id"         (:user-id kp2))]
     (testing "signature check fails for wrong key"
-      (is (thrown? Exception (schema/unwrap bad-env))))))
+      (is (thrown? Exception (schema/unwrap-envelope bad-env))))))
 
 (deftest test-unwrap-rejects-tampered-content
   (let [kp      (make-kp)
         content (sample-dr kp)
-        env     (schema/wrap content kp)
+        env     (schema/wrap-envelope content kp)
         tampered (update env "env/content"
                          assoc "dr/version" 99)]
     (testing "signature check fails after content modification"
-      (is (thrown? Exception (schema/unwrap tampered))))))
+      (is (thrown? Exception (schema/unwrap-envelope tampered))))))
 
 (deftest test-unwrap-rejects-mismatched-user-id
   (let [kp1     (make-kp)
         kp2     (make-kp)
         content (sample-dr kp1)
-        env     (schema/wrap content kp1)
+        env     (schema/wrap-envelope content kp1)
         ;; keep kp1's signature but swap in kp2's user-id
         bad-env (assoc env "env/user-id" (:user-id kp2))]
     (testing "user-id mismatch with public key is rejected"
-      (is (thrown? Exception (schema/unwrap bad-env))))))
+      (is (thrown? Exception (schema/unwrap-envelope bad-env))))))
 
 ;; ---------------------------------------------------------------------------
 ;; b64 encode/decode

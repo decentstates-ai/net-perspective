@@ -4,7 +4,7 @@
             [clojure.test.check.generators :as gen]
             [com.gfredericks.test.chuck.clojure-test :refer [checking]]
             [net-perspective.crypto :as crypto]
-            [net-perspective.codec :as codec]
+            [net-perspective.schema :as schema]
             [net-perspective.test-utils]))
 
 (net-perspective.test-utils/deftest-ns-schemas-test)
@@ -78,7 +78,7 @@
     (let [kp    (crypto/generate-key-pair)
           cpath ["food"]
           crd   (make-crd (:user-id kp) now cpath hops [src-cid])
-          rt    (codec/unmarshal (codec/marshal crd))]
+          rt    (schema/unmarshal-document (schema/marshal-document crd))]
       (is (= 1           (get rt "crd/version")))
       (is (= (vec cpath) (vec (get rt "crd/context-path"))))
       (is (= (count hops) (count (get rt "crd/hops")))))))

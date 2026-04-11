@@ -2,9 +2,7 @@
   "Inductive batch computation of context-relations-deps for all homed users."
   (:require [clj-http.client :as http]
             [malli.core :as m]
-            [net-perspective.codec :as codec]
             [net-perspective.schema :as schema]
-            [net-perspective.util :as util]
             [net-perspective.ipfs.client :as ipfs]
             [net-perspective.peer.state :as state]
             [net-perspective.peer.registry :as registry]))
@@ -65,7 +63,7 @@
        [:maybe #'schema/Cid]])
 
 (defn- make-index-ctx-entry
-  "Builds one ContextRelationsDepsIndexContext entry from a computed deps doc."
+  "Builds one ContextRelationsDepsIndexContext entry from a computed deps document."
   [cpath deps deps-cid]
   {"crd-idx-ctx/path"        cpath
    "crd-idx-ctx/crd-address" deps-cid
@@ -75,18 +73,18 @@
       [:=> [:cat #'schema/ContextPath #'schema/ContextRelationsDeps #'schema/Cid]
        #'schema/ContextRelationsDepsIndexContext])
 
-(defn- make-index-doc
+(defn- make-index-document
   "Builds a ContextRelationsDepsIndex document."
   [user-id now index-contexts]
   {"crd-idx/version"      1
    "crd-idx/timestamp-ns" now
    "crd-idx/user-id"      user-id
    "crd-idx/contexts"     index-contexts})
-(m/=> make-index-doc
+(m/=> make-index-document
       [:=> [:cat #'schema/UserId :int [:vector #'schema/ContextRelationsDepsIndexContext]]
        #'schema/ContextRelationsDepsIndex])
 
-(defn- make-user-info-doc
+(defn- make-user-info-document
   "Builds a UserInfo document."
   [kp now dr-cid]
   {"user/version"         1
@@ -94,17 +92,17 @@
    "user/user-id"         (:user-id kp)
    "user/user-public-key" (:encoded-public-key kp)
    "user/dr-address"      dr-cid})
-(m/=> make-user-info-doc
+(m/=> make-user-info-document
       [:=> [:cat #'schema/KeyPair :int #'schema/Cid] #'schema/UserInfo])
 
 ;; ---------------------------------------------------------------------------
 ;; IO helpers
 
-(defn- add-doc!
-  "Marshals doc to JCS bytes and adds it to the IPFS store. Returns CID."
-  {:malli/schema [:=> [:cat #'schema/PeerServer :any] #'schema/Cid]}
-  [server doc]
-  (ipfs/add (:ipfs server) (codec/marshal doc)))
+(defn- add-document!
+  "Marshals document to JCS bytes and adds it to the IPFS store. Returns CID."
+  [server document]
+  (ipfs/add (:ipfs server) (schema/marshal-document document)))
+(m/=> add-document! [:=> [:cat #'schema/PeerServer :any] #'schema/Cid])
 
 ;; ---------------------------------------------------------------------------
 ;; Fetch context deps for a related user
@@ -114,17 +112,17 @@
    Tries local state first (direct IPFS access), then remote peer via HTTP.
    rel-user-id may be raw bytes or a base64 string (JSON round-trip)."
   [server rel-user-id target-path]
-  (let [uid      (util/ensure-bytes rel-user-id)
+  (let [uid      (schema/ensure-bytes rel-user-id)
         fetch-fn (fn [index-cid fetch-cid]
                    (when-let [ic (not-empty index-cid)]
-                     (when-let [dc (find-deps-cid (codec/unmarshal (fetch-cid ic)) target-path)]
-                       [(codec/unmarshal (fetch-cid dc)) dc])))]
+                     (when-let [dc (find-deps-cid (schema/unmarshal-document (fetch-cid ic)) target-path)]
+                       [(schema/unmarshal-document (fetch-cid dc)) dc])))]
     (or
      (when-let [user (state/get-user server uid)]
        (fetch-fn (:index-cid user) #(ipfs/cat (:ipfs server) %)))
      (when-let [peer-url (some-> (:registry server) (registry/lookup uid))]
        (try
-         (let [resp (http/get (str peer-url "/status/users/" (util/bytes->hex uid)) {:as :json})]
+         (let [resp (http/get (str peer-url "/status/users/" (schema/bytes->hex uid)) {:as :json})]
            (when (= 200 (:status resp))
              (fetch-fn (get-in resp [:body :index-cid])
                        #(:body (http/get (str peer-url "/cid/" %) {:as :byte-array})))))
@@ -189,9 +187,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Process one user
 
-(defn- process-user!
-  {:malli/schema [:=> [:cat #'schema/PeerServer #'schema/HomedUser] :nil]}
-  [server user]
+(defn- process-user! [server user]
   (let [dr     (:latest-dr user)
         dr-cid (:latest-dr-cid user)
         kp     (:key-pair user)]
@@ -200,22 +196,23 @@
             index-ctxs (mapv (fn [ctx]
                                (let [cpath    (get ctx "dr-ctx/path")
                                      deps     (compute-deps server user cpath now)
-                                     deps-cid (add-doc! server deps)]
+                                     deps-cid (add-document! server deps)]
                                  (make-index-ctx-entry cpath deps deps-cid)))
                              (get dr "dr/contexts" []))
-            index-cid  (add-doc! server (make-index-doc (:user-id kp) now index-ctxs))]
+            index-cid  (add-document! server (make-index-document (:user-id kp) now index-ctxs))]
         (state/set-index-cid! server (:user-id kp) index-cid)
-        (let [ui-cid (add-doc! server (schema/wrap (make-user-info-doc kp now dr-cid) kp))]
+        (let [ui-cid (add-document! server (schema/wrap-envelope (make-user-info-document kp now dr-cid) kp))]
           (ipfs/publish-ipns (:ipfs server) (:ipns-key-name user) ui-cid))))))
+(m/=> process-user! [:=> [:cat #'schema/PeerServer #'schema/HomedUser] :nil])
 
 ;; ---------------------------------------------------------------------------
 ;; Public entry point
 
 (defn run-batch!
   "Runs one batch update round for all homed users."
-  {:malli/schema [:=> [:cat #'schema/PeerServer] :nil]}
   [server]
   (doseq [user (state/all-users server)]
     (try (process-user! server user)
          (catch Exception e
            (println (str "batch: user error: " (.getMessage e)))))))
+(m/=> run-batch! [:=> [:cat #'schema/PeerServer] :nil])

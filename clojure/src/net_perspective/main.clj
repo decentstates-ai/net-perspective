@@ -10,8 +10,7 @@
             [net-perspective.util :as util]
             [net-perspective.ipfs.client :as ipfs]
             [net-perspective.peer.state :as state]
-            [net-perspective.peer.system :as peer-system]
-            [net-perspective.lib.system :as system])
+            [net-perspective.peer.system :as peer-system])
   (:import [java.io File]
            [java.nio.file Files StandardOpenOption])
   (:gen-class))
@@ -78,14 +77,14 @@
   (let [{:keys [ipfs listen dir]} opts
         port (Integer/parseInt (if (str/starts-with? listen ":") (subs listen 1) listen))
         kp   (load-or-create-key dir)]
-    (println (str "peer identity: " (util/bytes->hex (:user-id kp))))
+    (println (str "peer identity: " (schema/bytes->hex (:user-id kp))))
     (println (str "listening on " listen))
     (with-open [sys (peer-system/start! {:ipfs-addr   ipfs
                                          :listen-port port
                                          :self-kp     kp})]
       (.addShutdownHook (Runtime/getRuntime)
                         (Thread. ^Runnable #(.close sys)))
-      (system/wait-forever @sys))))
+      (util/wait-forever @sys))))
 
 ;; ---------------------------------------------------------------------------
 ;; init command
@@ -100,11 +99,11 @@
       (spit f (json/generate-string
                {"dr/version"      1
                 "dr/timestamp-ns" 0
-                "dr/user-id"      (util/b64-encode (:user-id kp))
+                "dr/user-id"      (schema/b64-encode (:user-id kp))
                 "dr/contexts"     []}
                {:pretty true}))
       (println (str "Created empty direct-relations at " (.getPath f))))
-    (println (str "user-id: " (util/bytes->hex (:user-id kp))))))
+    (println (str "user-id: " (schema/bytes->hex (:user-id kp))))))
 
 ;; ---------------------------------------------------------------------------
 ;; submit command
@@ -120,16 +119,16 @@
         dr        (assoc dr-raw
                          "dr/user-id"      (:user-id kp)
                          "dr/timestamp-ns" (System/nanoTime))
-        dr-env    (schema/wrap dr kp)
+        dr-env    (schema/wrap-envelope dr kp)
         ui        {"user/version"         1
                    "user/timestamp-ns"    (get dr "dr/timestamp-ns")
                    "user/user-id"         (:user-id kp)
                    "user/user-public-key" (:encoded-public-key kp)}
-        ui-env    (schema/wrap ui kp)
+        ui-env    (schema/wrap-envelope ui kp)
         body      (json/generate-string {"user-env" ui-env "dr-env" dr-env})
         peer-list (if peers (str/split peers #",") [])]
     (doseq [peer peer-list]
-      (let [url (str (util/ensure-http peer) "/submit")]
+      (let [url (str (schema/ensure-http peer) "/submit")]
         (try
           (let [resp (http/post url {:body body :content-type :json :as :json})]
             (if (= 200 (:status resp))
@@ -151,10 +150,10 @@
     (when-not ipns-addr
       (println "usage: fetch-index <ipns-address> [--peer <url>]")
       (System/exit 1))
-    (let [base    (util/ensure-http peer-base)
+    (let [base    (schema/ensure-http peer-base)
           ui-raw  (-> (http/get (str base "/user/" ipns-addr) {:as :json}) :body)
-          ui      (schema/unwrap ui-raw)
-          hex-id  (util/bytes->hex (util/ensure-bytes (get ui "user/user-id")))
+          ui      (schema/unwrap-envelope ui-raw)
+          hex-id  (schema/bytes->hex (schema/ensure-bytes (get ui "user/user-id")))
           st      (-> (http/get (str base "/status/users/" hex-id) {:as :json}) :body)
           idx-cid (get st "index-cid")]
       (if (empty? idx-cid)

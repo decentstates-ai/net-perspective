@@ -3,9 +3,9 @@
    All kubo RPC endpoints are POST requests."
   (:require [clj-http.client :as http]
             [clj-http.conn-mgr :as conn-mgr]
-            [cheshire.core :as json]
-            [net-perspective.util :as util]
-            [net-perspective.lib.system :as system]))
+            [malli.core :as m]
+            [net-perspective.schema :as schema]
+            [net-perspective.util :as util]))
 
 ;; ---------------------------------------------------------------------------
 ;; Protocol — implemented by Client (real kubo) and MemStore (tests)
@@ -18,6 +18,13 @@
   (key-gen      [store key-name]     "Idempotently create ed25519 IPNS key; returns IPNS address.")
   (ping         [store]              "Returns true if daemon reachable."))
 
+(m/=> add          [:=> [:cat :any #'schema/ContentBytes] #'schema/Cid])
+(m/=> cat          [:=> [:cat :any #'schema/Cid] #'schema/ContentBytes])
+(m/=> publish-ipns [:=> [:cat :any #'schema/KeyName #'schema/Cid] :nil])
+(m/=> resolve-ipns [:=> [:cat :any #'schema/IpnsAddress] #'schema/Cid])
+(m/=> key-gen      [:=> [:cat :any #'schema/KeyName] #'schema/IpnsAddress])
+(m/=> ping         [:=> [:cat :any] :boolean])
+
 ;; ---------------------------------------------------------------------------
 ;; Real kubo HTTP client
 
@@ -27,13 +34,13 @@
   "Creates a closeable Client pointed at the kubo RPC API.
    Deref to get the Store. Closing shuts down the connection manager.
    addr e.g. \"localhost:5001\" or \"http://localhost:5001\"."
-  {:malli/schema [:=> [:cat :string] :any]}
   [addr]
-  (let [base (util/ensure-http addr)
+  (let [base (schema/ensure-http addr)
         cm   (conn-mgr/make-reusable-conn-manager {})]
-    (system/closeable
+    (util/closeable
      (->Client (str base "/api/v0") cm)
      #(conn-mgr/shutdown-manager (:conn-mgr %)))))
+(m/=> new-client [:=> [:cat :string] :any])
 
 (extend-type Client
   Store
@@ -102,9 +109,9 @@
 
 (defn new-mem-store
   "Creates a closeable in-memory Store for testing. No teardown needed."
-  {:malli/schema [:=> [:cat] :any]}
   []
-  (system/closeable (->MemStore (atom {}) (atom {}) (atom 0))))
+  (util/closeable (->MemStore (atom {}) (atom {}) (atom 0))))
+(m/=> new-mem-store [:=> [:cat] :any])
 
 (extend-type MemStore
   Store

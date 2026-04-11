@@ -1,6 +1,5 @@
 (ns net-perspective.schema
-  "Malli schemas for all net-perspective document types, plus envelope
-   wrap/unwrap.
+  "All net-perspective types, serialisation, and envelope signing in one place.
 
    All documents are RFC 8785 (JCS) canonicalized JSON.
    Byte arrays are base64-encoded (standard, padded) in JSON —
@@ -8,16 +7,77 @@
   (:require [malli.core :as m]
             [malli.error :as me]
             [cheshire.core :as json]
-            [net-perspective.codec :as codec]
-            [net-perspective.crypto :as crypto]
-            [net-perspective.util :as util]))
+            [net-perspective.crypto :as crypto])
+  (:import [java.util Base64]
+           [org.erdtman.jcs JsonCanonicalizer]))
 
-;; Aliases kept for call-site compatibility.
-(def b64-encode  util/b64-encode)
-(def b64-decode  util/b64-decode)
-(def ensure-bytes util/ensure-bytes)
-(def marshal     codec/marshal)
-(def unmarshal   codec/unmarshal)
+;; ---------------------------------------------------------------------------
+;; Byte / hex / base64 utilities
+
+(def ^:private base64-re
+  #"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})?$")
+
+(defn b64-encode ^String [^bytes b]
+  (.encodeToString (Base64/getEncoder) b))
+(m/=> b64-encode [:=> [:cat bytes?] [:re base64-re]])
+
+(defn b64-decode ^bytes [^String s]
+  (.decode (Base64/getDecoder) s))
+(m/=> b64-decode [:=> [:cat [:re base64-re]] bytes?])
+
+(defn ensure-bytes
+  "Returns v as a byte array. Accepts byte arrays (pass-through) or
+   base64 strings (decoded). Needed because JSON round-trip converts
+   byte arrays to base64 strings."
+  ^bytes [v]
+  (cond
+    (bytes? v)  v
+    (string? v) (b64-decode v)
+    :else (throw (ex-info "expected bytes or base64 string" {:value v}))))
+(m/=> ensure-bytes [:=> [:cat [:or bytes? [:re base64-re]]] bytes?])
+
+(defn bytes->hex ^String [^bytes b]
+  (apply str (map #(format "%02x" (bit-and % 0xFF)) b)))
+(m/=> bytes->hex [:=> [:cat bytes?] [:re #"^[0-9a-f]*$"]])
+
+(defn hex->bytes ^bytes [^String s]
+  (let [len (/ (count s) 2)
+        out (byte-array len)]
+    (dotimes [i len]
+      (aset out i (unchecked-byte (Integer/parseInt (subs s (* i 2) (+ (* i 2) 2)) 16))))
+    out))
+(m/=> hex->bytes [:=> [:cat [:re #"^[0-9a-f]+"]] bytes?])
+
+(defn ensure-http
+  "Ensures s starts with http:// or https://; prepends http:// if missing."
+  ^String [^String s]
+  (if (.startsWith s "http") s (str "http://" s)))
+(m/=> ensure-http [:=> [:cat :string] [:re #"^https?://"]])
+
+;; ---------------------------------------------------------------------------
+;; JCS serialisation
+
+(defn- bytes->b64-map
+  "Walk a Clojure data structure, replacing byte arrays with base64 strings."
+  [v]
+  (cond
+    (bytes? v)      (b64-encode v)
+    (map? v)        (into {} (map (fn [[k val]] [k (bytes->b64-map val)]) v))
+    (sequential? v) (mapv bytes->b64-map v)
+    :else           v))
+
+(defn marshal-document
+  "Serialise a Clojure map to JCS-canonical JSON bytes.
+   Byte arrays are base64-encoded before serialisation."
+  ^bytes [document]
+  (.getEncodedUTF8 (JsonCanonicalizer. (json/generate-string (bytes->b64-map document)))))
+(m/=> marshal-document [:=> [:cat :any] bytes?])
+
+(defn unmarshal-document
+  "Deserialise JCS JSON bytes to a Clojure map with string keys."
+  [^bytes data]
+  (json/parse-string (String. data "UTF-8")))
+(m/=> unmarshal-document [:=> [:cat bytes?] :map])
 
 ;; ---------------------------------------------------------------------------
 ;; Primitive type aliases — string types
@@ -32,7 +92,7 @@
 
 (def Base64String
   "Standard padded base64-encoded byte string."
-  [:re #"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})?$"])
+  [:re base64-re])
 
 (def PeerUrl
   "HTTP or HTTPS base URL for a remote peer."
@@ -221,45 +281,45 @@
 ;; Validation
 
 (defn validate!
-  "Validates doc against schema. Returns doc on success, throws on failure."
-  {:malli/schema [:=> [:cat :any :any] :any]}
-  [schema doc]
-  (when-not (m/validate schema doc)
+  "Validates document against schema. Returns document on success, throws on failure."
+  [schema document]
+  (when-not (m/validate schema document)
     (throw (ex-info "document validation failed"
-                    {:errors (me/humanize (m/explain schema doc))})))
-  doc)
+                    {:errors (me/humanize (m/explain schema document))})))
+  document)
+(m/=> validate! [:=> [:cat :any :any] :any])
 
 ;; ---------------------------------------------------------------------------
 ;; Envelope wrap / unwrap
 
-(defn wrap
+(defn wrap-envelope
   "Signs content-map with kp and returns an envelope map (string keys).
    content-map must be a Clojure map; it is marshalled to JCS bytes for signing.
    kp must have :private-params, :encoded-public-key, and :user-id."
   [content-map kp]
-  (let [content-bytes (codec/marshal content-map)
+  (let [content-bytes (marshal-document content-map)
         sig           (crypto/sign (:private-params kp) content-bytes)]
     {"env/content"         (json/parse-string (String. content-bytes "UTF-8"))
      "env/user-id"         (:user-id kp)
      "env/user-public-key" (:encoded-public-key kp)
      "env/signature"       sig}))
-(m/=> wrap [:=> [:cat :map :map] #'Envelope])
+(m/=> wrap-envelope [:=> [:cat :map #'KeyPair] #'Envelope])
 
-(defn unwrap
+(defn unwrap-envelope
   "Verifies an envelope map and returns the decoded content map.
    Throws if the signature is invalid or user-id is inconsistent.
    Accepts envelopes that have been through a JSON round-trip (byte
    array fields may be base64 strings)."
   [envelope]
-  (let [enc-pubkey (util/ensure-bytes (get envelope "env/user-public-key"))
-        user-id    (util/ensure-bytes (get envelope "env/user-id"))
-        signature  (util/ensure-bytes (get envelope "env/signature"))
+  (let [enc-pubkey (ensure-bytes (get envelope "env/user-public-key"))
+        user-id    (ensure-bytes (get envelope "env/user-id"))
+        signature  (ensure-bytes (get envelope "env/signature"))
         content    (get envelope "env/content")]
     (when-not (java.util.Arrays/equals
                ^bytes user-id
                ^bytes (crypto/compute-user-id enc-pubkey))
       (throw (ex-info "user-id does not match public key" {})))
-    (when-not (crypto/verify enc-pubkey (codec/marshal content) signature)
+    (when-not (crypto/verify enc-pubkey (marshal-document content) signature)
       (throw (ex-info "invalid envelope signature" {})))
     content))
-(m/=> unwrap [:=> [:cat #'Envelope] :any])
+(m/=> unwrap-envelope [:=> [:cat #'Envelope] :any])

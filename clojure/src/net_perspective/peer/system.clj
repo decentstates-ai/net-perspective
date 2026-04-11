@@ -7,7 +7,7 @@
   (:require [malli.core :as m]
             [ring.adapter.jetty :as jetty]
             [net-perspective.schema :as schema]
-            [net-perspective.lib.system :as system]
+            [net-perspective.util :as util]
             [net-perspective.ipfs.client :as ipfs]
             [net-perspective.peer.state :as state]
             [net-perspective.peer.registry :as registry]
@@ -35,7 +35,7 @@
         stop-batch (scheduler/run-scheduler! server)
         jetty-srv  (jetty/run-jetty (handler/make-handler server)
                                     {:port listen-port :join? false})]
-    (system/closeable
+    (util/closeable
      server
      (fn [_]
        (.stop ^Server jetty-srv)
