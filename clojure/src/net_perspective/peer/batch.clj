@@ -23,9 +23,9 @@
       [:=> [:cat #'schema/Cid :int] #'schema/ContextRelationsDepsHop])
 
 (defn- adjust-hops
-  "Returns hops from related-deps with hop counts incremented by current-hop,
-   dropping any that would exceed 10."
-  [current-hop related-deps]
+  "Returns hops with hop counts incremented by current-hop, dropping any that
+   would exceed 10."
+  [current-hop hops]
   (reduce
    (fn [acc h]
      (let [adjusted (+ current-hop (get h "crd-hop/hop" 1))]
@@ -33,23 +33,22 @@
          acc
          (conj acc (assoc h "crd-hop/hop" adjusted)))))
    []
-   (get related-deps "crd/hops" [])))
+   hops))
 (m/=> adjust-hops
-      [:=> [:cat :int #'schema/ContextRelationsDeps]
+      [:=> [:cat :int [:vector #'schema/ContextRelationsDepsHop]]
        [:vector #'schema/ContextRelationsDepsHop]])
 
 (defn- make-crd
   "Builds a ContextRelationsDeps document from its components."
-  [user-id context-path hop1 extra-hops src-cids]
+  [user-id now context-path hops src-cids]
   {"crd/version"          1
-   "crd/timestamp-ns"     (System/nanoTime)
+   "crd/timestamp-ns"     now
    "crd/user-id"          user-id
    "crd/context-path"     context-path
-   "crd/hops"             (into [hop1] extra-hops)
+   "crd/hops"             hops
    "crd/source-addresses" src-cids})
 (m/=> make-crd
-      [:=> [:cat #'schema/UserId #'schema/ContextPath
-            #'schema/ContextRelationsDepsHop
+      [:=> [:cat #'schema/UserId :int #'schema/ContextPath
             [:vector #'schema/ContextRelationsDepsHop]
             [:vector #'schema/Cid]]
        #'schema/ContextRelationsDeps])
@@ -193,7 +192,7 @@
                            (catch Exception e
                              (println (str "batch: dep fetch failed: " (.getMessage e)))
                              nil))]
-               [(into hops (adjust-hops current-hop related-deps))
+               [(into hops (adjust-hops current-hop (get related-deps "crd/hops" [])))
                 (if deps-cid (conj srcs deps-cid) srcs)]
                [hops srcs])))))
      [[] []]
@@ -206,8 +205,9 @@
 ;; Compute deps for one user+context
 
 (defn- compute-deps
-  [server user dr context-path]
-  (let [dr-cid  (:latest-dr-cid user)
+  [server user context-path now]
+  (let [dr      (:latest-dr user)
+        dr-cid  (:latest-dr-cid user)
         dr-size (try (alength ^bytes (fetch-bytes server dr-cid))
                      (catch Exception _ 0))
         hop1    (make-hop1 dr-cid dr-size)
@@ -215,9 +215,9 @@
                                    (catch Exception e
                                      (println (str "batch: transitive dep fetch failed: " (.getMessage e)))
                                      [[] []]))]
-    (make-crd (:user-id (:key-pair user)) context-path hop1 extra-hops src-cids)))
+    (make-crd (:user-id (:key-pair user)) now context-path (into [hop1] extra-hops) src-cids)))
 (m/=> compute-deps
-      [:=> [:cat #'schema/PeerServer #'schema/HomedUser #'schema/DirectRelations #'schema/ContextPath]
+      [:=> [:cat #'schema/PeerServer #'schema/HomedUser #'schema/ContextPath :int]
        #'schema/ContextRelationsDeps])
 
 ;; ---------------------------------------------------------------------------
@@ -233,7 +233,7 @@
       (let [now        (System/nanoTime)
             index-ctxs (mapv (fn [ctx]
                                (let [cpath    (get ctx "dr-ctx/path")
-                                     deps     (compute-deps server user dr cpath)
+                                     deps     (compute-deps server user cpath now)
                                      deps-cid (add-doc! server deps)]
                                  (make-index-ctx-entry cpath deps deps-cid)))
                              (get dr "dr/contexts" []))
