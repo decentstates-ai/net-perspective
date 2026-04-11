@@ -114,6 +114,13 @@
     ["crd-idx/user-id"     bytes?]
     ["crd-idx/contexts"    [:vector ContextRelationsDepsIndexContext]]]))
 
+(def RingResponse
+  (m/schema
+   [:map
+    [:status  :int]
+    [:headers [:map-of :string :string]]
+    [:body    :any]]))
+
 ;; ---------------------------------------------------------------------------
 ;; Validation
 
@@ -133,7 +140,6 @@
   "Signs content-map with kp and returns an envelope map (string keys).
    content-map must be a Clojure map; it is marshalled to JCS bytes for signing.
    kp must have :private-params, :encoded-public-key, and :user-id."
-  {:malli/schema [:=> [:cat :map :map] :map]}
   [content-map kp]
   (let [content-bytes (codec/marshal content-map)
         sig           (crypto/sign (:private-params kp) content-bytes)]
@@ -141,13 +147,13 @@
      "env/user-id"         (:user-id kp)
      "env/user-public-key" (:encoded-public-key kp)
      "env/signature"       sig}))
+(m/=> wrap [:=> [:cat :map :map] #'Envelope])
 
 (defn unwrap
   "Verifies an envelope map and returns the decoded content map.
    Throws if the signature is invalid or user-id is inconsistent.
    Accepts envelopes that have been through a JSON round-trip (byte
    array fields may be base64 strings)."
-  {:malli/schema [:=> [:cat :map] :any]}
   [envelope]
   (let [enc-pubkey (util/ensure-bytes (get envelope "env/user-public-key"))
         user-id    (util/ensure-bytes (get envelope "env/user-id"))
@@ -160,3 +166,4 @@
     (when-not (crypto/verify enc-pubkey (codec/marshal content) signature)
       (throw (ex-info "invalid envelope signature" {})))
     content))
+(m/=> unwrap [:=> [:cat #'Envelope] :any])

@@ -2,6 +2,7 @@
   "Ring HTTP handlers and Reitit routes for the peer server."
   (:require [reitit.ring :as ring]
             [cheshire.core :as json]
+            [malli.core :as m]
             [net-perspective.codec :as codec]
             [net-perspective.schema :as schema]
             [net-perspective.util :as util]
@@ -17,13 +18,20 @@
    {:status  status
     :headers {"Content-Type" "application/json"}
     :body    (json/generate-string body)}))
+(m/=> json-resp
+      [:function
+       [:=> [:cat :any]      #'schema/RingResponse]
+       [:=> [:cat :any :int] #'schema/RingResponse]])
 
 (defn- error-resp [status msg]
   {:status  status
    :headers {"Content-Type" "text/plain"}
    :body    msg})
+(m/=> error-resp [:=> [:cat :int :string] #'schema/RingResponse])
 
-(defn- parse-body [req]
+(defn- parse-body
+  {:malli/schema [:=> [:cat :map] [:maybe :map]]}
+  [req]
   (some-> (:body req) slurp (json/parse-string))) ; string keys
 
 ;; ---------------------------------------------------------------------------
@@ -31,7 +39,9 @@
 ;;
 ;; Uses a sentinel exception to short-circuit validation with an HTTP response.
 
-(defn- submit-error [status msg]
+(defn- submit-error
+  {:malli/schema [:=> [:cat :int :string] :never]}
+  [status msg]
   (throw (ex-info msg {::resp (error-resp status msg)})))
 
 (defn- parse-submit-body [req]
@@ -42,6 +52,8 @@
     (when (nil? ui-env) (submit-error 400 "missing user-env"))
     (when (nil? dr-env) (submit-error 400 "missing dr-env"))
     [ui-env dr-env]))
+(m/=> parse-submit-body
+      [:=> [:cat :map] [:tuple #'schema/Envelope #'schema/Envelope]])
 
 (defn- unwrap-submit-envelopes [ui-env dr-env]
   (let [ui (try (schema/unwrap ui-env)
@@ -49,6 +61,9 @@
         dr (try (schema/unwrap dr-env)
                 (catch Exception e (submit-error 400 (str "invalid direct-relations: " (.getMessage e)))))]
     [ui dr]))
+(m/=> unwrap-submit-envelopes
+      [:=> [:cat #'schema/Envelope #'schema/Envelope]
+       [:tuple #'schema/UserInfo #'schema/DirectRelations]])
 
 (defn- validate-submit-ids [ui dr dr-env]
   (let [ui-uid    (util/ensure-bytes (get ui "user/user-id"))
@@ -59,8 +74,14 @@
     (when-not (java.util.Arrays/equals ^bytes dr-uid ^bytes dr-signer)
       (submit-error 400 "dr envelope signer does not match dr content user-id"))
     ui-uid))
+(m/=> validate-submit-ids
+      [:=> [:cat #'schema/UserInfo #'schema/DirectRelations #'schema/Envelope]
+       bytes?])
 
-(defn- add-doc! [server doc] (ipfs/add (:ipfs server) (codec/marshal doc)))
+(defn- add-doc!
+  {:malli/schema [:=> [:cat :map :any] :string]}
+  [server doc]
+  (ipfs/add (:ipfs server) (codec/marshal doc)))
 
 (defn- store-submit! [server user-id dr ui-env dr-env]
   (let [user (state/get-user server user-id)]
@@ -73,6 +94,9 @@
       (ipfs/publish-ipns (:ipfs server) (:ipns-key-name user) ui-cid)
       (state/store-dr! server user-id dr dr-cid)
       (json-resp {"cid" dr-cid}))))
+(m/=> store-submit!
+      [:=> [:cat :map bytes? #'schema/DirectRelations #'schema/Envelope #'schema/Envelope]
+       #'schema/RingResponse])
 
 (defn- handle-submit [server req]
   (try
@@ -83,6 +107,7 @@
     (catch clojure.lang.ExceptionInfo e
       (or (::resp (ex-data e))
           (error-resp 500 (.getMessage e))))))
+(m/=> handle-submit [:=> [:cat :map :map] #'schema/RingResponse])
 
 ;; ---------------------------------------------------------------------------
 ;; GET /user/:userID  and  GET /cid/:cid
@@ -97,6 +122,7 @@
      :body    (String. ^bytes (ipfs/cat (:ipfs server) cid) "UTF-8")}
     (catch Exception e
       (error-resp 404 (str err-prefix ": " (.getMessage e))))))
+(m/=> ipfs-raw-resp [:=> [:cat :map :string :string] #'schema/RingResponse])
 
 (defn- handle-get-user-info [server req]
   (let [ipns-addr (get-in req [:path-params :userID])]
@@ -105,9 +131,11 @@
         (ipfs-raw-resp server cid "resolve error"))
       (catch Exception e
         (error-resp 404 (str "resolve error: " (.getMessage e)))))))
+(m/=> handle-get-user-info [:=> [:cat :map :map] #'schema/RingResponse])
 
 (defn- handle-get-by-cid [server req]
   (ipfs-raw-resp server (get-in req [:path-params :cid]) "fetch error"))
+(m/=> handle-get-by-cid [:=> [:cat :map :map] #'schema/RingResponse])
 
 ;; ---------------------------------------------------------------------------
 ;; Status helpers
@@ -129,6 +157,7 @@
 
 (defn- handle-status-users [server _req]
   (json-resp (mapv user-status (state/all-users server))))
+(m/=> handle-status-users [:=> [:cat :map :map] #'schema/RingResponse])
 
 ;; ---------------------------------------------------------------------------
 ;; GET /status/users/:userID
@@ -143,6 +172,7 @@
           (error-resp 404 "user not found")))
       (catch Exception _
         (error-resp 400 "invalid user-id")))))
+(m/=> handle-status-user [:=> [:cat :map :map] #'schema/RingResponse])
 
 ;; ---------------------------------------------------------------------------
 ;; Router

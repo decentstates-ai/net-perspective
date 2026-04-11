@@ -1,6 +1,7 @@
 (ns net-perspective.peer.batch
   "Inductive batch computation of context-relations-deps for all homed users."
   (:require [clj-http.client :as http]
+            [malli.core :as m]
             [net-perspective.codec :as codec]
             [net-perspective.schema :as schema]
             [net-perspective.util :as util]
@@ -13,17 +14,17 @@
 
 (defn- make-hop1
   "Builds the first-hop entry representing a user's own DR."
-  {:malli/schema [:=> [:cat :string :int] :map]}
   [dr-cid dr-size]
   {"crd-hop/hop"             1
    "crd-hop/dr-addresses"    [dr-cid]
    "crd-hop/archive-address" dr-cid
    "crd-hop/size"            dr-size})
+(m/=> make-hop1
+      [:=> [:cat :string :int] #'schema/ContextRelationsDepsHop])
 
 (defn- adjust-hops
   "Returns hops from related-deps with hop counts incremented by current-hop,
    dropping any that would exceed 10."
-  {:malli/schema [:=> [:cat :int :map] [:vector :map]]}
   [current-hop related-deps]
   (reduce
    (fn [acc h]
@@ -33,10 +34,12 @@
          (conj acc (assoc h "crd-hop/hop" adjusted)))))
    []
    (get related-deps "crd/hops" [])))
+(m/=> adjust-hops
+      [:=> [:cat :int #'schema/ContextRelationsDeps]
+       [:vector #'schema/ContextRelationsDepsHop]])
 
 (defn- make-crd
   "Builds a ContextRelationsDeps document from its components."
-  {:malli/schema [:=> [:cat bytes? [:vector :string] :map [:vector :map] [:vector :string]] :map]}
   [user-id context-path hop1 extra-hops src-cids]
   {"crd/version"          1
    "crd/timestamp-ns"     (System/nanoTime)
@@ -44,54 +47,69 @@
    "crd/context-path"     context-path
    "crd/hops"             (into [hop1] extra-hops)
    "crd/source-addresses" src-cids})
+(m/=> make-crd
+      [:=> [:cat bytes? [:vector :string]
+            #'schema/ContextRelationsDepsHop
+            [:vector #'schema/ContextRelationsDepsHop]
+            [:vector :string]]
+       #'schema/ContextRelationsDeps])
 
 (defn- find-deps-cid
   "Returns the crd-address for target-path in a parsed index map, or nil."
-  {:malli/schema [:=> [:cat :map [:vector :string]] [:maybe :string]]}
   [index target-path]
   (->> (get index "crd-idx/contexts" [])
        (filter #(= (get % "crd-idx-ctx/path") target-path))
        first
        (#(get % "crd-idx-ctx/crd-address"))))
+(m/=> find-deps-cid
+      [:=> [:cat #'schema/ContextRelationsDepsIndex [:vector :string]]
+       [:maybe :string]])
 
 (defn- make-index-ctx-entry
   "Builds one ContextRelationsDepsIndexContext entry from a computed deps doc."
-  {:malli/schema [:=> [:cat [:vector :string] :map :string] :map]}
   [cpath deps deps-cid]
   {"crd-idx-ctx/path"        cpath
    "crd-idx-ctx/crd-address" deps-cid
    "crd-idx-ctx/hops"        (reduce max 0 (map #(get % "crd-hop/hop" 0) (get deps "crd/hops" [])))
    "crd-idx-ctx/size"        (reduce + 0 (map #(get % "crd-hop/size" 0) (get deps "crd/hops" [])))})
+(m/=> make-index-ctx-entry
+      [:=> [:cat [:vector :string] #'schema/ContextRelationsDeps :string]
+       #'schema/ContextRelationsDepsIndexContext])
 
 (defn- make-index-doc
   "Builds a ContextRelationsDepsIndex document."
-  {:malli/schema [:=> [:cat bytes? :int [:vector :map]] :map]}
   [user-id now index-contexts]
   {"crd-idx/version"      1
    "crd-idx/timestamp-ns" now
    "crd-idx/user-id"      user-id
    "crd-idx/contexts"     index-contexts})
+(m/=> make-index-doc
+      [:=> [:cat bytes? :int [:vector #'schema/ContextRelationsDepsIndexContext]]
+       #'schema/ContextRelationsDepsIndex])
 
 (defn- make-user-info-doc
   "Builds a UserInfo document."
-  {:malli/schema [:=> [:cat :map :int :string] :map]}
   [kp now dr-cid]
   {"user/version"         1
    "user/timestamp-ns"    now
    "user/user-id"         (:user-id kp)
    "user/user-public-key" (:encoded-public-key kp)
    "user/dr-address"      dr-cid})
+(m/=> make-user-info-doc
+      [:=> [:cat :map :int :string] #'schema/UserInfo])
 
 ;; ---------------------------------------------------------------------------
 ;; IO helpers
 
 (defn- add-doc!
   "Marshals doc to JCS bytes and adds it to the IPFS store. Returns CID."
+  {:malli/schema [:=> [:cat :map :any] :string]}
   [server doc]
   (ipfs/add (:ipfs server) (codec/marshal doc)))
 
 (defn- fetch-bytes
   "Fetches raw bytes for cid from IPFS."
+  {:malli/schema [:=> [:cat :map :string] bytes?]}
   [server cid]
   (ipfs/cat (:ipfs server) cid))
 
@@ -105,6 +123,9 @@
   (let [deps-cid (find-deps-cid (codec/unmarshal index-bytes) target-path)]
     (when deps-cid
       [(codec/unmarshal (fetch-fn deps-cid)) deps-cid])))
+(m/=> fetch-deps-from-index
+      [:=> [:cat bytes? [:vector :string] fn?]
+       [:maybe [:tuple #'schema/ContextRelationsDeps :string]]])
 
 (defn- fetch-local-user-context-deps
   "Fetches context deps for a locally-homed user."
@@ -112,6 +133,9 @@
   (when-let [index-cid (seq (:index-cid related-user))]
     (fetch-deps-from-index (fetch-bytes server index-cid) target-path
                            #(fetch-bytes server %))))
+(m/=> fetch-local-user-context-deps
+      [:=> [:cat :map :map [:vector :string]]
+       [:maybe [:tuple #'schema/ContextRelationsDeps :string]]])
 
 (defn- fetch-remote-user-context-deps
   "Fetches context deps for a user homed on a remote peer via HTTP."
@@ -127,6 +151,9 @@
         (when (seq index-cid)
           (let [fetch-fn #(:body (http/get (str peer-url "/cid/" %) {:as :byte-array}))]
             (fetch-deps-from-index (fetch-fn index-cid) target-path fetch-fn)))))))
+(m/=> fetch-remote-user-context-deps
+      [:=> [:cat :string bytes? [:vector :string]]
+       [:maybe [:tuple #'schema/ContextRelationsDeps :string]]])
 
 (defn- fetch-user-context-deps
   "Resolves a related user's context-deps, trying local first then remote.
@@ -139,6 +166,9 @@
         (when-let [peer-url (some-> (:registry server)
                                     (registry/lookup uid))]
           (fetch-remote-user-context-deps peer-url uid target-path)))))
+(m/=> fetch-user-context-deps
+      [:=> [:cat :map [:or bytes? :string] [:vector :string]]
+       [:maybe [:tuple #'schema/ContextRelationsDeps :string]]])
 
 ;; ---------------------------------------------------------------------------
 ;; Transitive dep fetching
@@ -168,6 +198,9 @@
                [hops srcs])))))
      [[] []]
      (mapcat #(get % "dr-ctx/relations" []) contexts))))
+(m/=> fetch-transitive-deps
+      [:=> [:cat :map #'schema/DirectRelations [:vector :string] :int]
+       [:tuple [:vector #'schema/ContextRelationsDepsHop] [:vector :string]]])
 
 ;; ---------------------------------------------------------------------------
 ;; Compute deps for one user+context
@@ -183,11 +216,16 @@
                                      (println (str "batch: transitive dep fetch failed: " (.getMessage e)))
                                      [[] []]))]
     (make-crd (:user-id (:key-pair user)) context-path hop1 extra-hops src-cids)))
+(m/=> compute-deps
+      [:=> [:cat :map :map #'schema/DirectRelations [:vector :string]]
+       #'schema/ContextRelationsDeps])
 
 ;; ---------------------------------------------------------------------------
 ;; Process one user
 
-(defn- process-user! [server user]
+(defn- process-user!
+  {:malli/schema [:=> [:cat :map :map] :nil]}
+  [server user]
   (let [dr     (:latest-dr user)
         dr-cid (:latest-dr-cid user)
         kp     (:key-pair user)]

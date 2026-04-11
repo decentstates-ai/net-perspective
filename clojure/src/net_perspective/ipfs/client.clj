@@ -24,6 +24,7 @@
 (defn new-client
   "Creates a Client pointed at the kubo RPC API.
    addr e.g. \"localhost:5001\" or \"http://localhost:5001\"."
+  {:malli/schema [:=> [:cat :string] :map]}
   [addr]
   (let [base (util/ensure-http addr)]
     (->Client (str base "/api/v0"))))
@@ -85,7 +86,9 @@
 
 (defrecord MemStore [data ipns counter])
 
-(defn new-mem-store []
+(defn new-mem-store
+  {:malli/schema [:=> [:cat] :map]}
+  []
   (->MemStore (atom {}) (atom {}) (atom 0)))
 
 (extend-type MemStore
