@@ -267,11 +267,17 @@
    [:map
     [:state :any]]))                     ; atom: {b64-id → peer-url}
 
-(def PeerServer
-  "Internal server state record (net-perspective.peer.state/Server)."
+(def ServerState
+  "Shape of the map held inside a PeerServer's state atom."
   (m/schema
    [:map
-    [:state    :any]                     ; atom: {:users {b64-id → HomedUser}}
+    [:users [:map-of :string HomedUser]]]))
+
+(def PeerServer
+  "Internal server state map (net-perspective.peer.state/new-server)."
+  (m/schema
+   [:map
+    [:state    :any]                     ; atom containing ServerState
     [:ipfs     :any]                     ; ipfs.client/Store implementation
     [:registry [:maybe :any]]            ; peer.registry/Registry or nil
     [:self-kp  KeyPair]

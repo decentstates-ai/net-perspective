@@ -5,24 +5,18 @@
             [malli.core :as m]
             [net-perspective.schema :as schema]))
 
-;; ---------------------------------------------------------------------------
-;; Server record
-
-(defrecord Server [state    ; atom: {:users {b64-id → user-map}}
-                   ipfs     ; ipfs.client/Client
-                   registry ; peer.registry/Registry
-                   self-kp  ; own key pair map
-                   addr     ; listen address string
-                   var-dir]); java.io.File cache dir, or nil to skip persistence
-
 (defn new-server
-  "Creates a Server. var-dir is a string path for state cache, or nil to
-   skip persistence (useful in tests)."
+  "Creates a PeerServer map. var-dir is a string path for state cache, or nil
+   to skip persistence (useful in tests)."
   ([ipfs-client listen-addr self-kp]
    (new-server ipfs-client listen-addr self-kp nil))
   ([ipfs-client listen-addr self-kp var-dir]
-   (->Server (atom {:users {}}) ipfs-client nil self-kp listen-addr
-             (when var-dir (io/file var-dir)))))
+   {:state    (atom {:users {}} :validator #(m/validate schema/ServerState %))
+    :ipfs     ipfs-client
+    :registry nil
+    :self-kp  self-kp
+    :addr     listen-addr
+    :var-dir  (when var-dir (io/file var-dir))}))
 (m/=> new-server
       [:function
        [:=> [:cat :any :string #'schema/KeyPair]         #'schema/PeerServer]
