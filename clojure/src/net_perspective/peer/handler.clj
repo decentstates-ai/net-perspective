@@ -76,10 +76,10 @@
     ui-uid))
 (m/=> validate-submit-ids
       [:=> [:cat #'schema/UserInfo #'schema/DirectRelations #'schema/Envelope]
-       bytes?])
+       #'schema/UserId])
 
 (defn- add-doc!
-  {:malli/schema [:=> [:cat :map :any] :string]}
+  {:malli/schema [:=> [:cat :map :any] #'schema/Cid]}
   [server doc]
   (ipfs/add (:ipfs server) (codec/marshal doc)))
 

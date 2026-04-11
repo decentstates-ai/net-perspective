@@ -20,7 +20,63 @@
 (def unmarshal   codec/unmarshal)
 
 ;; ---------------------------------------------------------------------------
-;; Malli schemas
+;; Primitive type aliases — string types
+
+(def Cid
+  "IPFS content identifier string (CIDv0 Qm… or CIDv1 bafy…)."
+  [:re #"^[A-Za-z0-9]+$"])
+
+(def HexId
+  "Lowercase hex-encoded byte string, e.g. user-id in HTTP endpoints."
+  [:re #"^[0-9a-f]+$"])
+
+(def Base64String
+  "Standard padded base64-encoded byte string."
+  [:re #"^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})?$"])
+
+(def PeerUrl
+  "HTTP or HTTPS base URL for a remote peer."
+  [:re #"^https?://"])
+
+(def IpnsAddress
+  "IPNS key address (libp2p CIDv1 key identifier, starts with k51q)."
+  [:re #"^k51q"])
+
+(def KeyName
+  "Identifier used to register a user's IPNS key with kubo."
+  :string)
+
+(def ContextPath
+  "Ordered sequence of string segments identifying a context."
+  [:vector :string])
+
+;; ---------------------------------------------------------------------------
+;; Primitive type aliases — bytes types
+
+(def UserId
+  "34-byte SHA2-256 multihash of the encoded public key."
+  [:and bytes? [:fn {:error/message "must be 34-byte SHA2-256 multihash"}
+                #(= 34 (alength ^bytes %))]])
+
+(def EncodedPublicKey
+  "Multicodec-prefixed (varint 0x1203) ML-DSA-44 public key bytes."
+  bytes?)
+
+(def Signature
+  "ML-DSA-44 (Dilithium2) signature bytes."
+  bytes?)
+
+(def Seed
+  "32-byte ML-DSA-44 private key seed."
+  [:and bytes? [:fn {:error/message "must be 32-byte seed"}
+                #(= 32 (alength ^bytes %))]])
+
+(def ContentBytes
+  "Raw bytes stored in or retrieved from IPFS."
+  bytes?)
+
+;; ---------------------------------------------------------------------------
+;; Document schemas
 ;; Field names are verbatim spec JSON keys (strings, not keywords).
 ;; We use string keys throughout to match the wire format directly.
 
@@ -28,27 +84,27 @@
   (m/schema
    [:map {:closed false}
     ["env/content"         :any]
-    ["env/user-id"         bytes?]
-    ["env/user-public-key" bytes?]
-    ["env/signature"       bytes?]]))
+    ["env/user-id"         UserId]
+    ["env/user-public-key" EncodedPublicKey]
+    ["env/signature"       Signature]]))
 
 (def DirectRelation
   (m/schema
    [:map {:closed false}
-    ["dr-rel/type" [:enum "user" "uri"]]
-    ["dr-rel-uri/uri"              {:optional true} :string]
-    ["dr-rel-uri/name"             {:optional true} :string]
-    ["dr-rel-uri/comment"          {:optional true} :string]
-    ["dr-rel-user/user-id"         {:optional true} bytes?]
-    ["dr-rel-user/context-path"    {:optional true} [:vector :string]]
-    ["dr-rel-user/transitive-depth" {:optional true} [:int {:min 1 :max 10}]]
-    ["dr-rel-user/subject-glob"    {:optional true} [:int {:min 0 :max 10}]]
-    ["dr-rel-user/object-glob"     {:optional true} [:int {:min 0 :max 10}]]]))
+    ["dr-rel/type"                    [:enum "user" "uri"]]
+    ["dr-rel-uri/uri"                 {:optional true} :string]
+    ["dr-rel-uri/name"                {:optional true} :string]
+    ["dr-rel-uri/comment"             {:optional true} :string]
+    ["dr-rel-user/user-id"            {:optional true} UserId]
+    ["dr-rel-user/context-path"       {:optional true} ContextPath]
+    ["dr-rel-user/transitive-depth"   {:optional true} [:int {:min 1 :max 10}]]
+    ["dr-rel-user/subject-glob"       {:optional true} [:int {:min 0 :max 10}]]
+    ["dr-rel-user/object-glob"        {:optional true} [:int {:min 0 :max 10}]]]))
 
 (def DirectRelationsContext
   (m/schema
    [:map {:closed false}
-    ["dr-ctx/path"      [:vector :string]]
+    ["dr-ctx/path"      ContextPath]
     ["dr-ctx/relations" [:vector DirectRelation]]]))
 
 (def DirectRelations
@@ -56,7 +112,7 @@
    [:map {:closed false}
     ["dr/version"                 :int]
     ["dr/timestamp-ns"            :int]
-    ["dr/user-id"                 bytes?]
+    ["dr/user-id"                 UserId]
     ["dr/contexts"                [:vector DirectRelationsContext]]
     ["dr/contact-email"           {:optional true} :string]
     ["dr/contact-signal-username" {:optional true} :string]
@@ -65,26 +121,26 @@
 (def PeeredUser
   (m/schema
    [:map {:closed false}
-    ["user-peered/user-id"         bytes?]
-    ["user-peered/crd-idx-address" :string]]))
+    ["user-peered/user-id"         UserId]
+    ["user-peered/crd-idx-address" Cid]]))
 
 (def UserInfo
   (m/schema
    [:map {:closed false}
-    ["user/version"        :int]
-    ["user/timestamp-ns"   :int]
-    ["user/user-id"        bytes?]
-    ["user/user-public-key" bytes?]
-    ["user/dr-address"     {:optional true} :string]
-    ["user/trusted-peers"  {:optional true} [:vector bytes?]]
-    ["user/peered-users"   {:optional true} [:vector PeeredUser]]]))
+    ["user/version"         :int]
+    ["user/timestamp-ns"    :int]
+    ["user/user-id"         UserId]
+    ["user/user-public-key" EncodedPublicKey]
+    ["user/dr-address"      {:optional true} Cid]
+    ["user/trusted-peers"   {:optional true} [:vector EncodedPublicKey]]
+    ["user/peered-users"    {:optional true} [:vector PeeredUser]]]))
 
 (def ContextRelationsDepsHop
   (m/schema
    [:map {:closed false}
     ["crd-hop/hop"             [:int {:min 1 :max 10}]]
-    ["crd-hop/dr-addresses"    [:vector bytes?]]
-    ["crd-hop/archive-address" bytes?]
+    ["crd-hop/dr-addresses"    [:vector Cid]]
+    ["crd-hop/archive-address" Cid]
     ["crd-hop/size"            :int]]))
 
 (def ContextRelationsDeps
@@ -92,27 +148,27 @@
    [:map {:closed false}
     ["crd/version"          :int]
     ["crd/timestamp-ns"     :int]
-    ["crd/user-id"          bytes?]
-    ["crd/context-path"     [:vector :string]]
+    ["crd/user-id"          UserId]
+    ["crd/context-path"     ContextPath]
     ["crd/hops"             [:vector ContextRelationsDepsHop]]
-    ["crd/source-addresses" {:optional true} [:vector bytes?]]]))
+    ["crd/source-addresses" {:optional true} [:vector Cid]]]))
 
 (def ContextRelationsDepsIndexContext
   (m/schema
    [:map {:closed false}
-    ["crd-idx-ctx/path"                  [:vector :string]]
-    ["crd-idx-ctx/crd-address"           bytes?]
+    ["crd-idx-ctx/path"                  ContextPath]
+    ["crd-idx-ctx/crd-address"           Cid]
     ["crd-idx-ctx/hops"                  :int]
-    ["crd-idx-ctx-hop/archive-addresses" {:optional true} [:vector bytes?]]
+    ["crd-idx-ctx-hop/archive-addresses" {:optional true} [:vector Cid]]
     ["crd-idx-ctx/size"                  :int]]))
 
 (def ContextRelationsDepsIndex
   (m/schema
    [:map {:closed false}
-    ["crd-idx/version"     :int]
+    ["crd-idx/version"      :int]
     ["crd-idx/timestamp-ns" :int]
-    ["crd-idx/user-id"     bytes?]
-    ["crd-idx/contexts"    [:vector ContextRelationsDepsIndexContext]]]))
+    ["crd-idx/user-id"      UserId]
+    ["crd-idx/contexts"     [:vector ContextRelationsDepsIndexContext]]]))
 
 (def RingResponse
   (m/schema

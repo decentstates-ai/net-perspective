@@ -1,6 +1,7 @@
 (ns net-perspective.peer.state
   "Atom-backed server state. All mutations are pure swap! calls."
-  (:require [net-perspective.schema :as schema]
+  (:require [malli.core :as m]
+            [net-perspective.schema :as schema]
             [net-perspective.util :as util]))
 
 ;; ---------------------------------------------------------------------------
@@ -35,9 +36,9 @@
 
 (defn get-user
   "Returns the user-map for user-id bytes, or nil."
-  {:malli/schema [:=> [:cat :map bytes?] [:maybe :map]]}
   [server ^bytes user-id]
   (get-in @(:state server) [:users (util/b64-encode user-id)]))
+(m/=> get-user [:=> [:cat :map #'schema/UserId] [:maybe :map]])
 
 (defn all-users
   "Returns a snapshot seq of all user-maps."
@@ -47,16 +48,15 @@
 
 (defn dr-timestamp
   "Returns the timestamp-ns of the stored direct-relations, or 0."
-  {:malli/schema [:=> [:cat :map bytes?] :int]}
   [server ^bytes user-id]
   (get-in @(:state server)
           [:users (util/b64-encode user-id) :latest-dr "dr/timestamp-ns"]
           0))
+(m/=> dr-timestamp [:=> [:cat :map #'schema/UserId] :int])
 
 (defn store-dr!
   "Updates a user's latest direct-relations and DR CID.
    Returns :updated if stored, :stale if the timestamp is not newer."
-  {:malli/schema [:=> [:cat :map bytes? :map :string] [:enum :updated :stale]]}
   [server ^bytes user-id dr-map dr-cid]
   (let [uid    (util/b64-encode user-id)
         ts-new (get dr-map "dr/timestamp-ns" 0)]
@@ -67,10 +67,13 @@
                       (assoc-in [:users uid :latest-dr-cid] dr-cid)))
           :updated)
       :stale)))
+(m/=> store-dr!
+      [:=> [:cat :map #'schema/UserId #'schema/DirectRelations #'schema/Cid]
+       [:enum :updated :stale]])
 
 (defn set-index-cid!
   "Records the latest context-relations-deps-index CID for a user."
-  {:malli/schema [:=> [:cat :map bytes? :string] :any]}
   [server ^bytes user-id index-cid]
   (swap! (:state server)
          assoc-in [:users (util/b64-encode user-id) :index-cid] index-cid))
+(m/=> set-index-cid! [:=> [:cat :map #'schema/UserId #'schema/Cid] :any])
