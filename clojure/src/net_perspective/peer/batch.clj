@@ -96,20 +96,20 @@
    "user/user-public-key" (:encoded-public-key kp)
    "user/dr-address"      dr-cid})
 (m/=> make-user-info-doc
-      [:=> [:cat :map :int #'schema/Cid] #'schema/UserInfo])
+      [:=> [:cat #'schema/KeyPair :int #'schema/Cid] #'schema/UserInfo])
 
 ;; ---------------------------------------------------------------------------
 ;; IO helpers
 
 (defn- add-doc!
   "Marshals doc to JCS bytes and adds it to the IPFS store. Returns CID."
-  {:malli/schema [:=> [:cat :map :any] #'schema/Cid]}
+  {:malli/schema [:=> [:cat #'schema/PeerServer :any] #'schema/Cid]}
   [server doc]
   (ipfs/add (:ipfs server) (codec/marshal doc)))
 
 (defn- fetch-bytes
   "Fetches raw bytes for cid from IPFS."
-  {:malli/schema [:=> [:cat :map #'schema/Cid] #'schema/ContentBytes]}
+  {:malli/schema [:=> [:cat #'schema/PeerServer #'schema/Cid] #'schema/ContentBytes]}
   [server cid]
   (ipfs/cat (:ipfs server) cid))
 
@@ -134,7 +134,7 @@
     (fetch-deps-from-index (fetch-bytes server index-cid) target-path
                            #(fetch-bytes server %))))
 (m/=> fetch-local-user-context-deps
-      [:=> [:cat :map :map #'schema/ContextPath]
+      [:=> [:cat #'schema/PeerServer #'schema/HomedUser #'schema/ContextPath]
        [:maybe [:tuple #'schema/ContextRelationsDeps #'schema/Cid]]])
 
 (defn- fetch-remote-user-context-deps
@@ -167,7 +167,7 @@
                                     (registry/lookup uid))]
           (fetch-remote-user-context-deps peer-url uid target-path)))))
 (m/=> fetch-user-context-deps
-      [:=> [:cat :map [:or #'schema/UserId #'schema/Base64String] #'schema/ContextPath]
+      [:=> [:cat #'schema/PeerServer [:or #'schema/UserId #'schema/Base64String] #'schema/ContextPath]
        [:maybe [:tuple #'schema/ContextRelationsDeps #'schema/Cid]]])
 
 ;; ---------------------------------------------------------------------------
@@ -199,7 +199,7 @@
      [[] []]
      (mapcat #(get % "dr-ctx/relations" []) contexts))))
 (m/=> fetch-transitive-deps
-      [:=> [:cat :map #'schema/DirectRelations #'schema/ContextPath :int]
+      [:=> [:cat #'schema/PeerServer #'schema/DirectRelations #'schema/ContextPath :int]
        [:tuple [:vector #'schema/ContextRelationsDepsHop] [:vector #'schema/Cid]]])
 
 ;; ---------------------------------------------------------------------------
@@ -217,14 +217,14 @@
                                      [[] []]))]
     (make-crd (:user-id (:key-pair user)) context-path hop1 extra-hops src-cids)))
 (m/=> compute-deps
-      [:=> [:cat :map :map #'schema/DirectRelations #'schema/ContextPath]
+      [:=> [:cat #'schema/PeerServer #'schema/HomedUser #'schema/DirectRelations #'schema/ContextPath]
        #'schema/ContextRelationsDeps])
 
 ;; ---------------------------------------------------------------------------
 ;; Process one user
 
 (defn- process-user!
-  {:malli/schema [:=> [:cat :map :map] :nil]}
+  {:malli/schema [:=> [:cat #'schema/PeerServer #'schema/HomedUser] :nil]}
   [server user]
   (let [dr     (:latest-dr user)
         dr-cid (:latest-dr-cid user)
@@ -247,7 +247,7 @@
 
 (defn run-batch!
   "Runs one batch update round for all homed users."
-  {:malli/schema [:=> [:cat :map] :nil]}
+  {:malli/schema [:=> [:cat #'schema/PeerServer] :nil]}
   [server]
   (doseq [user (state/all-users server)]
     (try (process-user! server user)

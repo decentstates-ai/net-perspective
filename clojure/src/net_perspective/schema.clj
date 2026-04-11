@@ -178,6 +178,46 @@
     [:body    :any]]))
 
 ;; ---------------------------------------------------------------------------
+;; Internal peer types
+
+(def KeyPair
+  "Key pair map returned by crypto/generate-key-pair or key-pair-from-seed."
+  (m/schema
+   [:map
+    [:private-seed       Seed]
+    [:private-params     :any]           ; MLDSAPrivateKeyParameters — opaque BC object
+    [:raw-public-key     bytes?]
+    [:encoded-public-key EncodedPublicKey]
+    [:user-id            UserId]]))
+
+(def HomedUser
+  "Internal state map for a user homed on this peer."
+  (m/schema
+   [:map
+    [:key-pair      KeyPair]
+    [:ipns-key-name KeyName]
+    [:ipns-address  IpnsAddress]
+    [:latest-dr     [:maybe :map]]       ; DirectRelations; byte fields may be base64 strings after JSON round-trip
+    [:latest-dr-cid [:maybe Cid]]
+    [:index-cid     [:maybe Cid]]]))
+
+(def Registry
+  "Internal registry record (net-perspective.peer.registry/Registry)."
+  (m/schema
+   [:map
+    [:state :any]]))                     ; atom: {b64-id → peer-url}
+
+(def PeerServer
+  "Internal server state record (net-perspective.peer.state/Server)."
+  (m/schema
+   [:map
+    [:state    :any]                     ; atom: {:users {b64-id → HomedUser}}
+    [:ipfs     :any]                     ; ipfs.client/Store implementation
+    [:registry [:maybe :any]]            ; peer.registry/Registry or nil
+    [:self-kp  KeyPair]
+    [:addr     :string]]))
+
+;; ---------------------------------------------------------------------------
 ;; Validation
 
 (defn validate!

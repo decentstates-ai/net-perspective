@@ -79,7 +79,7 @@
        #'schema/UserId])
 
 (defn- add-doc!
-  {:malli/schema [:=> [:cat :map :any] #'schema/Cid]}
+  {:malli/schema [:=> [:cat #'schema/PeerServer :any] #'schema/Cid]}
   [server doc]
   (ipfs/add (:ipfs server) (codec/marshal doc)))
 
@@ -95,7 +95,7 @@
       (state/store-dr! server user-id dr dr-cid)
       (json-resp {"cid" dr-cid}))))
 (m/=> store-submit!
-      [:=> [:cat :map bytes? #'schema/DirectRelations #'schema/Envelope #'schema/Envelope]
+      [:=> [:cat #'schema/PeerServer bytes? #'schema/DirectRelations #'schema/Envelope #'schema/Envelope]
        #'schema/RingResponse])
 
 (defn- handle-submit [server req]
@@ -107,7 +107,7 @@
     (catch clojure.lang.ExceptionInfo e
       (or (::resp (ex-data e))
           (error-resp 500 (.getMessage e))))))
-(m/=> handle-submit [:=> [:cat :map :map] #'schema/RingResponse])
+(m/=> handle-submit [:=> [:cat #'schema/PeerServer :map] #'schema/RingResponse])
 
 ;; ---------------------------------------------------------------------------
 ;; GET /user/:userID  and  GET /cid/:cid
@@ -122,7 +122,7 @@
      :body    (String. ^bytes (ipfs/cat (:ipfs server) cid) "UTF-8")}
     (catch Exception e
       (error-resp 404 (str err-prefix ": " (.getMessage e))))))
-(m/=> ipfs-raw-resp [:=> [:cat :map :string :string] #'schema/RingResponse])
+(m/=> ipfs-raw-resp [:=> [:cat #'schema/PeerServer :string :string] #'schema/RingResponse])
 
 (defn- handle-get-user-info [server req]
   (let [ipns-addr (get-in req [:path-params :userID])]
@@ -131,18 +131,18 @@
         (ipfs-raw-resp server cid "resolve error"))
       (catch Exception e
         (error-resp 404 (str "resolve error: " (.getMessage e)))))))
-(m/=> handle-get-user-info [:=> [:cat :map :map] #'schema/RingResponse])
+(m/=> handle-get-user-info [:=> [:cat #'schema/PeerServer :map] #'schema/RingResponse])
 
 (defn- handle-get-by-cid [server req]
   (ipfs-raw-resp server (get-in req [:path-params :cid]) "fetch error"))
-(m/=> handle-get-by-cid [:=> [:cat :map :map] #'schema/RingResponse])
+(m/=> handle-get-by-cid [:=> [:cat #'schema/PeerServer :map] #'schema/RingResponse])
 
 ;; ---------------------------------------------------------------------------
 ;; Status helpers
 
 (defn user-status
   "Returns a status map for a user-map (used by handlers and tests)."
-  {:malli/schema [:=> [:cat :map] :map]}
+  {:malli/schema [:=> [:cat #'schema/HomedUser] :map]}
   [user]
   (let [kp (:key-pair user)
         dr (:latest-dr user)]
@@ -157,7 +157,7 @@
 
 (defn- handle-status-users [server _req]
   (json-resp (mapv user-status (state/all-users server))))
-(m/=> handle-status-users [:=> [:cat :map :map] #'schema/RingResponse])
+(m/=> handle-status-users [:=> [:cat #'schema/PeerServer :map] #'schema/RingResponse])
 
 ;; ---------------------------------------------------------------------------
 ;; GET /status/users/:userID
@@ -172,13 +172,13 @@
           (error-resp 404 "user not found")))
       (catch Exception _
         (error-resp 400 "invalid user-id")))))
-(m/=> handle-status-user [:=> [:cat :map :map] #'schema/RingResponse])
+(m/=> handle-status-user [:=> [:cat #'schema/PeerServer :map] #'schema/RingResponse])
 
 ;; ---------------------------------------------------------------------------
 ;; Router
 
 (defn make-handler
-  {:malli/schema [:=> [:cat :map] fn?]}
+  {:malli/schema [:=> [:cat #'schema/PeerServer] fn?]}
   [server]
   (ring/ring-handler
    (ring/router

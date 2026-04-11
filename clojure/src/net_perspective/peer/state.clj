@@ -14,7 +14,7 @@
                    addr])   ; listen address string
 
 (defn new-server
-  {:malli/schema [:=> [:cat :any :string :map] :map]}
+  {:malli/schema [:=> [:cat :any :string #'schema/KeyPair] #'schema/PeerServer]}
   [ipfs-client listen-addr self-kp]
   (->Server (atom {:users {}}) ipfs-client nil self-kp listen-addr))
 
@@ -29,7 +29,7 @@
 
 (defn add-homed-user!
   "Registers a user the peer will home."
-  {:malli/schema [:=> [:cat :map :map] :nil]}
+  {:malli/schema [:=> [:cat #'schema/PeerServer #'schema/HomedUser] :nil]}
   [server user-map]
   (let [uid (util/b64-encode (get-in user-map [:key-pair :user-id]))]
     (swap! (:state server) assoc-in [:users uid] user-map)))
@@ -38,11 +38,11 @@
   "Returns the user-map for user-id bytes, or nil."
   [server ^bytes user-id]
   (get-in @(:state server) [:users (util/b64-encode user-id)]))
-(m/=> get-user [:=> [:cat :map #'schema/UserId] [:maybe :map]])
+(m/=> get-user [:=> [:cat #'schema/PeerServer #'schema/UserId] [:maybe #'schema/HomedUser]])
 
 (defn all-users
   "Returns a snapshot seq of all user-maps."
-  {:malli/schema [:=> [:cat :map] [:sequential :map]]}
+  {:malli/schema [:=> [:cat #'schema/PeerServer] [:sequential #'schema/HomedUser]]}
   [server]
   (vals (get-in @(:state server) [:users])))
 
@@ -52,7 +52,7 @@
   (get-in @(:state server)
           [:users (util/b64-encode user-id) :latest-dr "dr/timestamp-ns"]
           0))
-(m/=> dr-timestamp [:=> [:cat :map #'schema/UserId] :int])
+(m/=> dr-timestamp [:=> [:cat #'schema/PeerServer #'schema/UserId] :int])
 
 (defn store-dr!
   "Updates a user's latest direct-relations and DR CID.
@@ -68,7 +68,7 @@
           :updated)
       :stale)))
 (m/=> store-dr!
-      [:=> [:cat :map #'schema/UserId #'schema/DirectRelations #'schema/Cid]
+      [:=> [:cat #'schema/PeerServer #'schema/UserId #'schema/DirectRelations #'schema/Cid]
        [:enum :updated :stale]])
 
 (defn set-index-cid!
@@ -76,4 +76,4 @@
   [server ^bytes user-id index-cid]
   (swap! (:state server)
          assoc-in [:users (util/b64-encode user-id) :index-cid] index-cid))
-(m/=> set-index-cid! [:=> [:cat :map #'schema/UserId #'schema/Cid] :any])
+(m/=> set-index-cid! [:=> [:cat #'schema/PeerServer #'schema/UserId #'schema/Cid] :any])
