@@ -55,13 +55,13 @@
 (defn cmd-peer [args]
   (let [{:keys [options]} (parse-opts args peer-opts)
         {:keys [ipfs listen dir]} options
-        kp     (load-or-create-key dir)
-        ipfs-c (ipfs/new-client ipfs)
-        reg    (registry/new-registry)
-        srv    (-> (state/new-server ipfs-c listen kp)
-                   (assoc :registry reg))
-        stop   (scheduler/run-scheduler! srv)
-        h      (handler/make-handler srv)]
+        kp            (load-or-create-key dir)
+        ipfs-closeable (ipfs/new-client ipfs)
+        reg           (registry/new-registry)
+        srv           (-> (state/new-server @ipfs-closeable listen kp)
+                          (assoc :registry reg))
+        stop          (scheduler/run-scheduler! srv)
+        h             (handler/make-handler srv)]
     (println (str "peer identity: " (util/bytes->hex (:user-id kp))))
     (println (str "listening on " listen))
     (let [port  (Integer/parseInt (if (.startsWith ^String listen ":") (subs listen 1) listen))
@@ -69,7 +69,8 @@
       (.addShutdownHook (Runtime/getRuntime)
                         (Thread. ^Runnable (fn []
                                              (stop)
-                                             (.stop ^Server jetty))))
+                                             (.stop ^Server jetty)
+                                             (.close ipfs-closeable))))
       (.join ^Server jetty))))
 
 ;; ---- init ------------------------------------------------------------------

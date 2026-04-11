@@ -57,7 +57,8 @@
                     (.redirectErrorStream true))
           _       (doto (.environment pb) (.putAll env))
           process (.start pb)
-          client  (ipfs/new-client (str "localhost:" api-port))
+          client-closeable (ipfs/new-client (str "localhost:" api-port))
+          client  @client-closeable
           deadline (+ (System/currentTimeMillis) 30000)]
       ;; Poll until responsive.
       (loop []
@@ -69,6 +70,7 @@
           (recur)))
       {:client  client
        :stop-fn (fn []
+                  (.close client-closeable)
                   (.destroy process)
                   (.waitFor process)
                   (doseq [f (reverse (file-seq repo-dir))]
