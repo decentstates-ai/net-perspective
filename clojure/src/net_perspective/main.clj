@@ -11,13 +11,10 @@
             [net-perspective.util :as util]
             [net-perspective.ipfs.client :as ipfs]
             [net-perspective.peer.state :as state]
-            [net-perspective.peer.registry :as registry]
-            [net-perspective.peer.handler :as handler]
-            [net-perspective.peer.scheduler :as scheduler]
-            [ring.adapter.jetty :as jetty])
+            [net-perspective.peer.system :as peer-system]
+            [net-perspective.lib.system :as system])
   (:import [java.io File]
-           [java.nio.file Files StandardOpenOption]
-           [org.eclipse.jetty.server Server])
+           [java.nio.file Files StandardOpenOption])
   (:gen-class))
 
 ;; ---------------------------------------------------------------------------
@@ -55,23 +52,16 @@
 (defn cmd-peer [args]
   (let [{:keys [options]} (parse-opts args peer-opts)
         {:keys [ipfs listen dir]} options
-        kp            (load-or-create-key dir)
-        ipfs-closeable (ipfs/new-client ipfs)
-        reg           (registry/new-registry)
-        srv           (-> (state/new-server @ipfs-closeable listen kp)
-                          (assoc :registry reg))
-        stop          (scheduler/run-scheduler! srv)
-        h             (handler/make-handler srv)]
+        port (Integer/parseInt (if (.startsWith ^String listen ":") (subs listen 1) listen))
+        kp   (load-or-create-key dir)]
     (println (str "peer identity: " (util/bytes->hex (:user-id kp))))
     (println (str "listening on " listen))
-    (let [port  (Integer/parseInt (if (.startsWith ^String listen ":") (subs listen 1) listen))
-          jetty (jetty/run-jetty h {:port port :join? false})]
+    (with-open [sys (peer-system/start! {:ipfs-addr   ipfs
+                                         :listen-port port
+                                         :self-kp     kp})]
       (.addShutdownHook (Runtime/getRuntime)
-                        (Thread. ^Runnable (fn []
-                                             (stop)
-                                             (.stop ^Server jetty)
-                                             (.close ipfs-closeable))))
-      (.join ^Server jetty))))
+                        (Thread. ^Runnable #(.close sys)))
+      (system/wait-forever @sys))))
 
 ;; ---- init ------------------------------------------------------------------
 
