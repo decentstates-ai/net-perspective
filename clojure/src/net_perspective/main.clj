@@ -1,10 +1,9 @@
 (ns net-perspective.main
-  "Single entrypoint. Dispatches on first argument:
-     peer          – start peer server + batch scheduler
-     init          – generate key pair and empty direct-relations
-     submit        – sign and submit direct-relations to peers
-     fetch-index   – fetch and print context-relations-deps-index"
-  (:require [clojure.tools.cli :refer [parse-opts]]
+  "Middleware-based CLI for the net-perspective peer server."
+  (:require [babashka.cli :as cli]
+            [clj-http.client :as http]
+            [clojure.string :as str]
+            [clojure.pprint :refer [pprint]]
             [cheshire.core :as json]
             [net-perspective.crypto :as crypto]
             [net-perspective.schema :as schema]
@@ -39,20 +38,45 @@
         kp))))
 
 ;; ---------------------------------------------------------------------------
-;; Subcommands
+;; Common CLI spec
 
-;; ---- peer ------------------------------------------------------------------
+(def common-spec
+  {:dir  {:alias :d :desc "Config directory" :default ".np" :coerce :string}
+   :help {:alias :h :desc "Display help."    :default false  :coerce :boolean}})
 
-(def peer-opts
-  [["-i" "--ipfs ADDR"    "IPFS API address" :default "localhost:5001"]
-   ["-l" "--listen ADDR"  "HTTP listen address" :default ":8080"]
-   ["-d" "--dir DIR"      "Config directory" :default ".np"]
-   ["-h" "--help"]])
+;; ---------------------------------------------------------------------------
+;; Middlewares
 
-(defn cmd-peer [args]
-  (let [{:keys [options]} (parse-opts args peer-opts)
-        {:keys [ipfs listen dir]} options
-        port (Integer/parseInt (if (.startsWith ^String listen ":") (subs listen 1) listen))
+(defn middleware-help [handler spec usage]
+  (fn [ctx]
+    (if (get-in ctx [:opts :help])
+      (do (println (str "Usage: net-perspective " usage))
+          (println)
+          (println (cli/format-opts {:spec spec})))
+      (handler ctx))))
+
+(defn middleware-exception [handler]
+  (fn [ctx]
+    (try (handler ctx)
+         (catch Exception e
+           (binding [*out* *err*]
+             (println "Error:" (ex-message e)))
+           (System/exit 1)))))
+
+(defn wrap-middlewares [handler middlewares]
+  (reduce (fn [acc mw] (mw acc)) handler (reverse middlewares)))
+
+;; ---------------------------------------------------------------------------
+;; peer command
+
+(def peer-spec
+  (merge common-spec
+         {:ipfs   {:alias :i :desc "IPFS API address"  :default "localhost:5001" :coerce :string}
+          :listen {:alias :l :desc "HTTP listen address" :default ":8080"        :coerce :string}}))
+
+(defn cmd-peer [{:keys [opts]}]
+  (let [{:keys [ipfs listen dir]} opts
+        port (Integer/parseInt (if (str/starts-with? listen ":") (subs listen 1) listen))
         kp   (load-or-create-key dir)]
     (println (str "peer identity: " (util/bytes->hex (:user-id kp))))
     (println (str "listening on " listen))
@@ -63,104 +87,122 @@
                         (Thread. ^Runnable #(.close sys)))
       (system/wait-forever @sys))))
 
-;; ---- init ------------------------------------------------------------------
+;; ---------------------------------------------------------------------------
+;; init command
 
-(def init-opts
-  [["-d" "--dir DIR" "Config directory" :default ".np"]
-   ["-h" "--help"]])
+(def init-spec common-spec)
 
-(defn cmd-init [args]
-  (let [{:keys [options]} (parse-opts args init-opts)
-        dir (:dir options)
-        kp  (load-or-create-key dir)
-        f   (dr-file dir)]
+(defn cmd-init [{:keys [opts]}]
+  (let [{:keys [dir]} opts
+        kp (load-or-create-key dir)
+        f  (dr-file dir)]
     (when-not (.exists f)
       (spit f (json/generate-string
-               {"dr/version"    1
+               {"dr/version"      1
                 "dr/timestamp-ns" 0
-                "dr/user-id"    (util/b64-encode (:user-id kp))
-                "dr/contexts"   []}
+                "dr/user-id"      (util/b64-encode (:user-id kp))
+                "dr/contexts"     []}
                {:pretty true}))
       (println (str "Created empty direct-relations at " (.getPath f))))
     (println (str "user-id: " (util/bytes->hex (:user-id kp))))))
 
-;; ---- submit ----------------------------------------------------------------
+;; ---------------------------------------------------------------------------
+;; submit command
 
-(def submit-opts
-  [["-d" "--dir DIR"       "Config directory" :default ".np"]
-   ["-p" "--peers PEERS"   "Comma-separated peer base URLs"]
-   ["-h" "--help"]])
+(def submit-spec
+  (merge common-spec
+         {:peers {:alias :p :desc "Comma-separated peer base URLs" :coerce :string}}))
 
-(defn cmd-submit [args]
-  (let [{:keys [options]} (parse-opts args submit-opts)
-        {:keys [dir peers]} options
-        kp         (load-or-create-key dir)
-        dr-raw     (json/parse-string (slurp (dr-file dir)))
-        dr         (assoc dr-raw
-                          "dr/user-id"      (:user-id kp)
-                          "dr/timestamp-ns" (System/nanoTime))
-        dr-env     (schema/wrap dr kp)
-        ui         {"user/version"        1
-                    "user/timestamp-ns"   (get dr "dr/timestamp-ns")
-                    "user/user-id"        (:user-id kp)
-                    "user/user-public-key" (:encoded-public-key kp)}
-        ui-env     (schema/wrap ui kp)
-        body       (json/generate-string {"user-env" ui-env
-                                          "dr-env"   dr-env})
-        peer-list  (if peers (clojure.string/split peers #",") [])]
+(defn cmd-submit [{:keys [opts]}]
+  (let [{:keys [dir peers]} opts
+        kp        (load-or-create-key dir)
+        dr-raw    (json/parse-string (slurp (dr-file dir)))
+        dr        (assoc dr-raw
+                         "dr/user-id"      (:user-id kp)
+                         "dr/timestamp-ns" (System/nanoTime))
+        dr-env    (schema/wrap dr kp)
+        ui        {"user/version"         1
+                   "user/timestamp-ns"    (get dr "dr/timestamp-ns")
+                   "user/user-id"         (:user-id kp)
+                   "user/user-public-key" (:encoded-public-key kp)}
+        ui-env    (schema/wrap ui kp)
+        body      (json/generate-string {"user-env" ui-env "dr-env" dr-env})
+        peer-list (if peers (str/split peers #",") [])]
     (doseq [peer peer-list]
-      (let [url  (str (util/ensure-http peer) "/submit")]
+      (let [url (str (util/ensure-http peer) "/submit")]
         (try
-          (let [resp (clj-http.client/post url
-                                           {:body         body
-                                            :content-type :json
-                                            :as           :json})]
+          (let [resp (http/post url {:body body :content-type :json :as :json})]
             (if (= 200 (:status resp))
               (println (str "submitted to " peer))
               (println (str "peer " peer " returned " (:status resp)))))
           (catch Exception e
             (println (str "peer " peer " error: " (.getMessage e)))))))))
 
-;; ---- fetch-index -----------------------------------------------------------
+;; ---------------------------------------------------------------------------
+;; fetch-index command
 
-(def fetch-opts
-  [["-p" "--peer PEER"  "Peer base URL to query"]
-   ["-d" "--dir DIR"    "Config directory (for default peer)" :default ".np"]
-   ["-h" "--help"]])
+(def fetch-index-spec
+  (merge common-spec
+         {:peer {:alias :p :desc "Peer base URL to query" :coerce :string}}))
 
-(defn cmd-fetch-index [args]
-  (let [[ipns-addr & rest-args] args
-        {:keys [options]}       (parse-opts rest-args fetch-opts)
-        peer-base               (:peer options)]
+(defn cmd-fetch-index [{:keys [opts args]}]
+  (let [ipns-addr (first args)
+        peer-base (:peer opts)]
     (when-not ipns-addr
       (println "usage: fetch-index <ipns-address> [--peer <url>]")
       (System/exit 1))
-    (let [base  (util/ensure-http peer-base)
-          ;; Resolve IPNS to get user-info
-          ui-raw (-> (clj-http.client/get (str base "/user/" ipns-addr) {:as :json})
-                     :body)
-          env    ui-raw
-          ui     (schema/unwrap env)
-          hex-id (util/bytes->hex (util/ensure-bytes (get ui "user/user-id")))
-          ;; Get index CID from status endpoint
-          st     (-> (clj-http.client/get (str base "/status/users/" hex-id) {:as :json})
-                     :body)
+    (let [base    (util/ensure-http peer-base)
+          ui-raw  (-> (http/get (str base "/user/" ipns-addr) {:as :json}) :body)
+          ui      (schema/unwrap ui-raw)
+          hex-id  (util/bytes->hex (util/ensure-bytes (get ui "user/user-id")))
+          st      (-> (http/get (str base "/status/users/" hex-id) {:as :json}) :body)
           idx-cid (get st "index-cid")]
       (if (empty? idx-cid)
         (println "no index published yet")
-        (let [index (-> (clj-http.client/get (str base "/cid/" idx-cid) {:as :json})
-                        :body)]
+        (let [index (-> (http/get (str base "/cid/" idx-cid) {:as :json}) :body)]
           (println (json/generate-string index {:pretty true})))))))
+
+;; ---------------------------------------------------------------------------
+;; Dispatch table
+
+(declare dispatch-table)
+
+(defn- print-top-help [_ctx]
+  (println "Usage: net-perspective <command> [options]")
+  (println)
+  (println "Commands:")
+  (println (cli/format-table
+            {:rows [["peer"        "Start the peer server"]
+                    ["init"        "Initialise config directory"]
+                    ["submit"      "Sign and submit direct-relations to peers"]
+                    ["fetch-index" "Fetch and print a user's context-relations-deps index"]]})))
+
+(def dispatch-table
+  [{:cmds ["peer"]
+    :fn   (wrap-middlewares cmd-peer [middleware-exception
+                                      #(middleware-help % peer-spec "peer [options]")])
+    :spec peer-spec}
+
+   {:cmds ["init"]
+    :fn   (wrap-middlewares cmd-init [middleware-exception
+                                      #(middleware-help % init-spec "init [options]")])
+    :spec init-spec}
+
+   {:cmds ["submit"]
+    :fn   (wrap-middlewares cmd-submit [middleware-exception
+                                        #(middleware-help % submit-spec "submit [options]")])
+    :spec submit-spec}
+
+   {:cmds ["fetch-index"]
+    :fn   (wrap-middlewares cmd-fetch-index [middleware-exception
+                                             #(middleware-help % fetch-index-spec "fetch-index <ipns-address> [options]")])
+    :spec fetch-index-spec}
+
+   {:cmds []
+    :fn   print-top-help}])
 
 ;; ---------------------------------------------------------------------------
 ;; Entrypoint
 
 (defn -main [& args]
-  (let [[cmd & rest] args]
-    (case cmd
-      "peer"        (cmd-peer rest)
-      "init"        (cmd-init rest)
-      "submit"      (cmd-submit rest)
-      "fetch-index" (cmd-fetch-index rest)
-      (do (println "usage: net-perspective <peer|init|submit|fetch-index> [options]")
-          (System/exit 1)))))
+  (cli/dispatch dispatch-table args))
