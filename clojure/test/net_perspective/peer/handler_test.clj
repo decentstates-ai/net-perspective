@@ -3,11 +3,14 @@
   (:require [clojure.test :refer [deftest is testing]]
             [ring.mock.request :as mock]
             [cheshire.core :as json]
+            [net-perspective.test-utils]
             [net-perspective.crypto :as crypto]
             [net-perspective.schema :as schema]
             [net-perspective.ipfs.client :as ipfs]
             [net-perspective.peer.state :as state]
             [net-perspective.peer.handler :as handler]))
+
+(net-perspective.test-utils/deftest-ns-schemas-test)
 
 ;; ---------------------------------------------------------------------------
 ;; Test helpers

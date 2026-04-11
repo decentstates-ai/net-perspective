@@ -1,8 +1,11 @@
 (ns net-perspective.schema-test
   (:require [clojure.test :refer [deftest is testing]]
             [net-perspective.schema :as schema]
-            [net-perspective.crypto :as crypto])
+            [net-perspective.crypto :as crypto]
+            [net-perspective.test-utils])
   (:import [java.util Arrays]))
+
+(net-perspective.test-utils/deftest-ns-schemas-test)
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers
