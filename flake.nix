@@ -2,13 +2,9 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-25.11";
     flake-utils.url = "github:numtide/flake-utils";
-
-    clojure-nix-locker.url = "github:bevuta/clojure-nix-locker";
-    clojure-nix-locker.inputs.nixpkgs.follows = "nixpkgs";
-    clojure-nix-locker.inputs.flake-utils.follows = "flake-utils";
   };
 
-  outputs = { self, nixpkgs, flake-utils, clojure-nix-locker, ... }:
+  outputs = { self, nixpkgs, flake-utils, ... }:
     {
         templates.default = {
           path = ./prsp-flake-template;
@@ -19,19 +15,11 @@
       let
         lib = nixpkgs.lib;
         pkgs = import nixpkgs { inherit system; };
-        jdk = pkgs.graalvmPackages.graalvm-ce;
-        clojure = (pkgs.clojure.override { inherit jdk; });
         hugo-shibui-theme = pkgs.fetchFromGitHub {
           owner = "ntk148v";
           repo = "shibui";
           rev = "8d4a86ad2f9d9677e1d2bd535c41168a008feeb1";
           hash = "sha256-OVDn5csKMY8pWg3JvR/ojyIDlerd+EdZnfeHAUTVanc=";
-        };
-        prsp-clojure-nix-locker = clojure-nix-locker.lib.customLocker {
-          inherit pkgs;
-          command = "${clojure}/bin/clojure -T:build ci-light";
-          lockfile = "./prsp-deps.lock.json";
-          src = ./prsp;
         };
       in rec {
         packages.hugo-themes = pkgs.stdenv.mkDerivation {
@@ -76,52 +64,16 @@
           '';
         };
 
-        packages.prsp-clojure-nix-locker = prsp-clojure-nix-locker;
-
-        packages.prsp = pkgs.stdenv.mkDerivation {
-          pname = "prsp";
-          version = "0.3.1";
-
-          src = ./prsp;
-
-          nativeBuildInputs = [
-            pkgs.graalvmPackages.graalvm-ce
-            pkgs.makeWrapper
-            clojure
-            pkgs.git
-            pkgs.openssh
-            # Breaks on macos:
-            # pkgs.breakpointHook
-          ];
-
-          buildPhase = ''
-            source ${prsp-clojure-nix-locker.shellEnv}
-
-            ${clojure}/bin/clojure -T:build ci
-          '';
-
-          installPhase = ''
-            mkdir -p $out/bin
-            cp target/org.net-perspective/prsp $out/bin/prsp
-          '';
-        };
 
         formatter = pkgs.nixfmt-rfc-style;
         devShells = {
           default = pkgs.mkShellNoCC {
             packages = [
-              jdk
-              clojure
-              pkgs.babashka
-              pkgs.clj-kondo
-              pkgs.cljfmt
-              pkgs.graphviz
-              pkgs.zip
-              pkgs.openssh
               pkgs.hugo
-              # self.packages.${system}.hugo-with-themes
-              # `clojure-nix-locker` script
-              prsp-clojure-nix-locker.locker
+              pkgs.go
+              pkgs.kubo
+              pkgs.clojure
+              pkgs.jdk21
             ];
           };
         };

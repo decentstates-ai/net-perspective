@@ -1,1 +1,0 @@
-{:lint-as {prspct.lib.utils/with-temp-dir clojure.core/let, prspct.lib.utils/with-temp-key-pairs clojure.core/let}}

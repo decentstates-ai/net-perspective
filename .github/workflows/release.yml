@@ -1,0 +1,62 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'prsp-v*'
+
+jobs:
+  build:
+    name: Build ${{ matrix.system }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            system: x86_64-linux
+          - runner: ubuntu-24.04-arm
+            system: aarch64-linux
+          - runner: macos-13
+            system: x86_64-darwin
+          - runner: macos-latest
+            system: aarch64-darwin
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: DeterminateSystems/nix-installer-action@v14
+
+      - uses: DeterminateSystems/magic-nix-cache-action@v8
+
+      - run: nix build .#prsp
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: prsp-${{ matrix.system }}
+          path: result/bin/prsp
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Rename artifacts
+        run: |
+          for dir in artifacts/prsp-*/; do
+            name=$(basename "$dir")
+            mv "$dir/prsp" "artifacts/$name"
+            rmdir "$dir"
+          done
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/prsp-*
+          generate_release_notes: true

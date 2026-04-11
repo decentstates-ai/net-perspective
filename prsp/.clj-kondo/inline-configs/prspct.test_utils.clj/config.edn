@@ -1,1 +1,0 @@
-{:lint-as {prspct.test-utils/with-perspects clojure.core/let}}
