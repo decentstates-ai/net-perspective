@@ -1,10 +1,7 @@
 (ns net-perspective.peer.state
   "Atom-backed server state. All mutations are pure swap! calls."
-  (:require [net-perspective.schema :as schema])
-  (:import [java.util Base64]))
-
-(defn- b64 ^String [^bytes b]
-  (.encodeToString (Base64/getEncoder) b))
+  (:require [net-perspective.schema :as schema]
+            [net-perspective.util :as util]))
 
 ;; ---------------------------------------------------------------------------
 ;; Server record
@@ -30,48 +27,42 @@
 (defn add-homed-user!
   "Registers a user the peer will home."
   [server user-map]
-  (let [uid (b64 (get-in user-map [:key-pair :user-id]))]
+  (let [uid (util/b64-encode (get-in user-map [:key-pair :user-id]))]
     (swap! (:state server) assoc-in [:users uid] user-map)))
 
 (defn get-user
   "Returns the user-map for user-id bytes, or nil."
   [server ^bytes user-id]
-  (get-in @(:state server) [:users (b64 user-id)]))
+  (get-in @(:state server) [:users (util/b64-encode user-id)]))
 
 (defn all-users
   "Returns a snapshot seq of all user-maps."
   [server]
   (vals (get-in @(:state server) [:users])))
 
+(defn dr-timestamp
+  "Returns the timestamp-ns of the stored direct-relations, or 0."
+  [server ^bytes user-id]
+  (get-in @(:state server)
+          [:users (util/b64-encode user-id) :latest-dr "dr/timestamp-ns"]
+          0))
+
 (defn store-dr!
   "Updates a user's latest direct-relations and DR CID.
-   Returns the updated user-map, or nil if the timestamp is not newer."
+   Returns :updated if stored, :stale if the timestamp is not newer."
   [server ^bytes user-id dr-map dr-cid]
-  (let [uid      (b64 user-id)
-        ts-new   (get dr-map "direct-relations/timestamp-ns" 0)]
-    (let [result (atom nil)]
-      (swap! (:state server)
-             (fn [s]
-               (let [current (get-in s [:users uid])
-                     ts-old  (get-in current [:latest-dr "direct-relations/timestamp-ns"] 0)]
-                 (if (> ts-new ts-old)
-                   (do (reset! result :updated)
-                       (-> s
-                           (assoc-in [:users uid :latest-dr]     dr-map)
-                           (assoc-in [:users uid :latest-dr-cid] dr-cid)))
-                   (do (reset! result :stale)
-                       s)))))
-      @result)))
+  (let [uid    (util/b64-encode user-id)
+        ts-new (get dr-map "dr/timestamp-ns" 0)]
+    (if (> ts-new (dr-timestamp server user-id))
+      (do (swap! (:state server)
+                 #(-> %
+                      (assoc-in [:users uid :latest-dr]     dr-map)
+                      (assoc-in [:users uid :latest-dr-cid] dr-cid)))
+          :updated)
+      :stale)))
 
 (defn set-index-cid!
   "Records the latest context-relations-deps-index CID for a user."
   [server ^bytes user-id index-cid]
   (swap! (:state server)
-         assoc-in [:users (b64 user-id) :index-cid] index-cid))
-
-(defn dr-timestamp
-  "Returns the timestamp-ns of the stored direct-relations, or 0."
-  [server ^bytes user-id]
-  (get-in @(:state server)
-          [:users (b64 user-id) :latest-dr "direct-relations/timestamp-ns"]
-          0))
+         assoc-in [:users (util/b64-encode user-id) :index-cid] index-cid))

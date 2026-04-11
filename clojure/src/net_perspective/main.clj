@@ -8,6 +8,7 @@
             [cheshire.core :as json]
             [net-perspective.crypto :as crypto]
             [net-perspective.schema :as schema]
+            [net-perspective.util :as util]
             [net-perspective.ipfs.client :as ipfs]
             [net-perspective.peer.state :as state]
             [net-perspective.peer.registry :as registry]
@@ -61,7 +62,7 @@
                    (assoc :registry reg))
         stop   (scheduler/run-scheduler! srv)
         h      (handler/make-handler srv)]
-    (println (str "peer identity: " (apply str (map #(format "%02x" (bit-and % 0xFF)) (:user-id kp)))))
+    (println (str "peer identity: " (util/bytes->hex (:user-id kp))))
     (println (str "listening on " listen))
     (let [port  (Integer/parseInt (if (.startsWith ^String listen ":") (subs listen 1) listen))
           jetty (jetty/run-jetty h {:port port :join? false})]
@@ -84,13 +85,13 @@
         f   (dr-file dir)]
     (when-not (.exists f)
       (spit f (json/generate-string
-               {"direct-relations/direct-relations-version" 1
-                "direct-relations/timestamp-ns"             0
-                "direct-relations/user-id"                  (schema/b64-encode (:user-id kp))
-                "direct-relations/contexts"                 []}
+               {"dr/version"    1
+                "dr/timestamp-ns" 0
+                "dr/user-id"    (util/b64-encode (:user-id kp))
+                "dr/contexts"   []}
                {:pretty true}))
       (println (str "Created empty direct-relations at " (.getPath f))))
-    (println (str "user-id: " (apply str (map #(format "%02x" (bit-and % 0xFF)) (:user-id kp)))))))
+    (println (str "user-id: " (util/bytes->hex (:user-id kp))))))
 
 ;; ---- submit ----------------------------------------------------------------
 
@@ -105,19 +106,19 @@
         kp         (load-or-create-key dir)
         dr-raw     (json/parse-string (slurp (dr-file dir)))
         dr         (assoc dr-raw
-                          "direct-relations/user-id"      (:user-id kp)
-                          "direct-relations/timestamp-ns" (System/nanoTime))
+                          "dr/user-id"      (:user-id kp)
+                          "dr/timestamp-ns" (System/nanoTime))
         dr-env     (schema/wrap dr kp)
-        ui         {"user-info/version"         1
-                    "user-info/timestamp-ns"     (get dr "direct-relations/timestamp-ns")
-                    "user-info/user-id"          (:user-id kp)
-                    "user-info/user-public-key"  (:encoded-public-key kp)}
+        ui         {"user/version"        1
+                    "user/timestamp-ns"   (get dr "dr/timestamp-ns")
+                    "user/user-id"        (:user-id kp)
+                    "user/user-public-key" (:encoded-public-key kp)}
         ui-env     (schema/wrap ui kp)
-        body       (json/generate-string {"user-info-envelope"        ui-env
-                                          "direct-relations-envelope" dr-env})
+        body       (json/generate-string {"user-env" ui-env
+                                          "dr-env"   dr-env})
         peer-list  (if peers (clojure.string/split peers #",") [])]
     (doseq [peer peer-list]
-      (let [url  (str (if (.startsWith ^String peer "http") peer (str "http://" peer)) "/submit")]
+      (let [url  (str (util/ensure-http peer) "/submit")]
         (try
           (let [resp (clj-http.client/post url
                                            {:body         body
@@ -143,13 +144,13 @@
     (when-not ipns-addr
       (println "usage: fetch-index <ipns-address> [--peer <url>]")
       (System/exit 1))
-    (let [base  (str (if (.startsWith ^String peer-base "http") peer-base (str "http://" peer-base)))
+    (let [base  (util/ensure-http peer-base)
           ;; Resolve IPNS to get user-info
           ui-raw (-> (clj-http.client/get (str base "/user/" ipns-addr) {:as :json})
                      :body)
           env    ui-raw
           ui     (schema/unwrap env)
-          hex-id (apply str (map #(format "%02x" (bit-and % 0xFF)) (get ui "user-info/user-id")))
+          hex-id (util/bytes->hex (util/ensure-bytes (get ui "user/user-id")))
           ;; Get index CID from status endpoint
           st     (-> (clj-http.client/get (str base "/status/users/" hex-id) {:as :json})
                      :body)

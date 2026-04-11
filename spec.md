@@ -50,89 +50,89 @@ Features:
 
 All documents are encoded RFC 8785 JSON.
 
-### envelope
+### env (envelope)
 
-- envelope/content: arbitrary json
-- envelope/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
-- envelope/user-public-key: multiformats/multicodec encoded public key, ml-dsa-44
-- envelope/signature: string of signature signing the content
+- env/content: arbitrary json
+- env/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
+- env/user-public-key: multiformats/multicodec encoded public key, ml-dsa-44
+- env/signature: string of signature signing the content
 
-### user-info
+### user (user-info)
 
 Within a signed envelope:
 
-- user-info/version: integer
-- user-info/timestamp-ns: unix timestamp in ns
-- user-info/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
-- user-info/user-public-key: multiformats/multicodec encoded public key, ml-dsa-44
-- user-info/direct-relations-content-address
-- user-info/trusted-peers: array of user-ids the user trusts to peer them.
-- user-info/peered-users: map of user-id ->
-  - user-info-peered-user/user-id
-  - user-info-peered-user/context-relations-deps-index-address
+- user/version: integer
+- user/timestamp-ns: unix timestamp in ns
+- user/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
+- user/user-public-key: multiformats/multicodec encoded public key, ml-dsa-44
+- user/dr-address: content address of the user's direct-relations document
+- user/trusted-peers: array of user-ids the user trusts to peer them.
+- user/peered-users: map of user-id ->
+  - user-peered/user-id
+  - user-peered/crd-idx-address
 
 
-### direct-relations
+### dr (direct-relations)
 
 (should this be merged into the above)
 
 Fields:
-- direct-relations/direct-relations-version:
-- direct-relations/timestamp-ns: unix timestamp in ns
-- direct-relations/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
+- dr/version:
+- dr/timestamp-ns: unix timestamp in ns
+- dr/user-id: multiformats/multihash of multiformats/multicodec encoded public key, ml-dsa-44
 
-- direct-relations/contact-email: (optional) valid email
-- direct-relations/contact-signal-username: (optional) valid signal id
-- direct-relations/contact-number: (optional) valid international mobile number
+- dr/contact-email: (optional) valid email
+- dr/contact-signal-username: (optional) valid signal id
+- dr/contact-number: (optional) valid international mobile number
 
-- direct-relations/contexts: array of:
-  - direct-relations-context/context-path: array of strings matching `/[a-z][a-z0-9\-]+/`
-  - direct-relations-context/relations: array of:
-    - direct-relations-rel/type: one of "user" or "uri"
-    - direct-relations-rel-uri/uri: uri field
-    - direct-relations-rel-uri/name: optional, string.
-    - direct-relations-rel-uri/comment: optional string.
-    - direct-relations-rel-user/user-id: same as direct-relations/user-id
-    - direct-relations-rel-user/context-path: optional, defaults to nil which means it is the same as the context path in direct-relations-context/context. Same type as direct-relations-context/context.
-    - direct-relations-rel-user/transitive-depth: optional, defaults to 2, max 10.
-    - direct-relations-rel-user/subject-glob: optional, defaults to 0 (no glob), integer 0-10. When non-zero, the subject's context path is treated as a prefix: Alice's context `food` with subject-glob 1 matches Bob's contexts `food.*` up to 1 level deep, expanding Alice's view to include those subcontexts.
-    - direct-relations-rel-user/object-glob: optional, defaults to 0 (no glob), integer 0-10. When non-zero, all of the object's matching subcontexts are collapsed into the subject's context: Alice's context `food` with object-glob 1 collects everything Bob exposes under `food.*` into Alice's single `food` context.
-
-
-### context-relations-deps
-
-Produced by a peer.
-
-Produced inductively from other users' context-relations-deps
-
-Fields:
-- context-relations-deps/version: integer
-- context-relations-deps/timestamp-ns
-- context-relations-deps/user-id: same as direct-relations-context/user-id
-- context-relations-deps/context-path: same as direct-relations-context/context-path
-- context-relations-deps/hops: array of:
-  - context-relations-deps-hop/hop: integer 1-10
-  - context-relations-deps-hop/direct-relations-addresses: array of multiformats/multihash — content addresses of the individual direct-relations documents at this hop
-  - context-relations-deps-hop/direct-relations-archive-address: multiformats/multihash — content address of a compressed archive containing all direct-relations documents at this hop
-  - context-relations-deps-hop/size: size in bytes of all the content in this hop
-- context-relations-deps/source-context-relations-deps-content-addresses: array of multiformats/multihash
+- dr/contexts: array of:
+  - dr-ctx/path: array of strings matching `/[a-z][a-z0-9\-]+/`
+  - dr-ctx/relations: array of:
+    - dr-rel/type: one of "user" or "uri"
+    - dr-rel-uri/uri: uri field
+    - dr-rel-uri/name: optional, string.
+    - dr-rel-uri/comment: optional string.
+    - dr-rel-user/user-id: same as dr/user-id
+    - dr-rel-user/context-path: optional, defaults to nil which means it is the same as the context path in dr-ctx/path. Same type as dr-ctx/path.
+    - dr-rel-user/transitive-depth: optional, defaults to 2, max 10.
+    - dr-rel-user/subject-glob: optional, defaults to 0 (no glob), integer 0-10. When non-zero, the subject's context path is treated as a prefix: Alice's context `food` with subject-glob 1 matches Bob's contexts `food.*` up to 1 level deep, expanding Alice's view to include those subcontexts.
+    - dr-rel-user/object-glob: optional, defaults to 0 (no glob), integer 0-10. When non-zero, all of the object's matching subcontexts are collapsed into the subject's context: Alice's context `food` with object-glob 1 collects everything Bob exposes under `food.*` into Alice's single `food` context.
 
 
-### context-relations-deps-index
+### crd (context-relations-deps)
 
 Produced by a peer.
 
+Produced inductively from other users' crd documents.
+
 Fields:
-- context-relations-deps-index/version: integer
-- context-relations-deps-index/timestamp-ns
-- context-relations-deps-index/user-id: same as direct-relations-context/user-id
-- context-relations-deps-index/contexts: array of:
-  - context-relations-deps-index-context/context-path: same as direct-relations-context/context-path
-  - context-relations-deps-index-context/context-relations-deps-content-address: multiformats/multihash
-  - context-relations-deps-index-context/hops: integer 1-10
-  - context-relations-deps-index-context-hop/direct-relations-collection-context-address: array of multiformats/multihash
-  - context-relations-deps-index-context-hop/size: size in bytes of all the direct-relations documents in this hop
-  - context-relations-deps-index-context/size: integer, bytes.
+- crd/version: integer
+- crd/timestamp-ns
+- crd/user-id: same as dr/user-id
+- crd/context-path: same as dr-ctx/path
+- crd/hops: array of:
+  - crd-hop/hop: integer 1-10
+  - crd-hop/dr-addresses: array of multiformats/multihash — content addresses of the individual dr documents at this hop
+  - crd-hop/archive-address: multiformats/multihash — content address of a compressed archive containing all dr documents at this hop
+  - crd-hop/size: size in bytes of all the content in this hop
+- crd/source-addresses: array of multiformats/multihash
+
+
+### crd-idx (context-relations-deps-index)
+
+Produced by a peer.
+
+Fields:
+- crd-idx/version: integer
+- crd-idx/timestamp-ns
+- crd-idx/user-id: same as dr/user-id
+- crd-idx/contexts: array of:
+  - crd-idx-ctx/path: same as dr-ctx/path
+  - crd-idx-ctx/crd-address: multiformats/multihash — content address of the crd document
+  - crd-idx-ctx/hops: integer 1-10
+  - crd-idx-ctx-hop/dr-addresses: array of multiformats/multihash
+  - crd-idx-ctx-hop/size: size in bytes of all the dr documents in this hop
+  - crd-idx-ctx/size: integer, bytes.
 
 
 ## Mechanics

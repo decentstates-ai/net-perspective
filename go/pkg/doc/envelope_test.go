@@ -104,7 +104,7 @@ func TestEnvelopeRejectsTamperedContent(t *testing.T) {
 	env, _ := doc.Wrap(dr, kp)
 
 	// Tamper with the content.
-	env.Content = json.RawMessage(`{"direct-relations/direct-relations-version":99}`)
+	env.Content = json.RawMessage(`{"dr/version":99}`)
 
 	var decoded doc.DirectRelations
 	if err := doc.Unwrap(env, &decoded); err == nil {

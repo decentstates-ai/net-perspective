@@ -40,11 +40,10 @@
   ^bytes [^bytes encoded]
   (let [prefix ml-dsa-44-codec-varint
         plen   (alength prefix)]
-    (dotimes [i plen]
-      (when (not= (aget encoded i) (aget prefix i))
-        (throw (ex-info "unexpected public key codec prefix"
-                        {:expected (vec prefix)
-                         :got      (vec (take plen encoded))}))))
+    (when-not (java.util.Arrays/equals prefix 0 plen encoded 0 plen)
+      (throw (ex-info "unexpected public key codec prefix"
+                      {:expected (vec prefix)
+                       :got      (vec (take plen encoded))})))
     (let [raw (byte-array (- (alength encoded) plen))]
       (System/arraycopy encoded plen raw 0 (alength raw))
       raw)))

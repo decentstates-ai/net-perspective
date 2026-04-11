@@ -1,73 +1,137 @@
 (ns net-perspective.peer.batch
   "Inductive batch computation of context-relations-deps for all homed users."
-  (:require [cheshire.core :as json]
-            [clj-http.client :as http]
+  (:require [clj-http.client :as http]
+            [net-perspective.codec :as codec]
             [net-perspective.schema :as schema]
+            [net-perspective.util :as util]
             [net-perspective.ipfs.client :as ipfs]
             [net-perspective.peer.state :as state]
             [net-perspective.peer.registry :as registry]))
 
 ;; ---------------------------------------------------------------------------
-;; Utilities
+;; Pure data constructors
 
-(defn- path= [a b]
-  (= (vec a) (vec b)))
+(defn- make-hop1
+  "Builds the first-hop entry representing a user's own DR."
+  [dr-cid dr-size]
+  {"crd-hop/hop"             1
+   "crd-hop/dr-addresses"    [dr-cid]
+   "crd-hop/archive-address" dr-cid
+   "crd-hop/size"            dr-size})
 
-(defn- now-ns [] (System/nanoTime))
+(defn- adjust-hops
+  "Returns hops from related-deps with hop counts incremented by current-hop,
+   dropping any that would exceed 10."
+  [current-hop related-deps]
+  (reduce
+   (fn [acc h]
+     (let [adjusted (+ current-hop (get h "crd-hop/hop" 1))]
+       (if (> adjusted 10)
+         acc
+         (conj acc (assoc h "crd-hop/hop" adjusted)))))
+   []
+   (get related-deps "crd/hops" [])))
 
-(defn- min* [a b] (if (< a b) a b))
+(defn- make-crd
+  "Builds a ContextRelationsDeps document from its components."
+  [user-id context-path hop1 extra-hops src-cids]
+  {"crd/version"          1
+   "crd/timestamp-ns"     (System/nanoTime)
+   "crd/user-id"          user-id
+   "crd/context-path"     context-path
+   "crd/hops"             (into [hop1] extra-hops)
+   "crd/source-addresses" src-cids})
+
+(defn- find-deps-cid
+  "Returns the crd-address for target-path in a parsed index map, or nil."
+  [index target-path]
+  (->> (get index "crd-idx/contexts" [])
+       (filter #(= (get % "crd-idx-ctx/path") target-path))
+       first
+       (#(get % "crd-idx-ctx/crd-address"))))
+
+(defn- make-index-ctx-entry
+  "Builds one ContextRelationsDepsIndexContext entry from a computed deps doc."
+  [cpath deps deps-cid]
+  {"crd-idx-ctx/path"        cpath
+   "crd-idx-ctx/crd-address" deps-cid
+   "crd-idx-ctx/hops"        (reduce max 0 (map #(get % "crd-hop/hop" 0) (get deps "crd/hops" [])))
+   "crd-idx-ctx/size"        (reduce + 0 (map #(get % "crd-hop/size" 0) (get deps "crd/hops" [])))})
+
+(defn- make-index-doc
+  "Builds a ContextRelationsDepsIndex document."
+  [user-id now index-contexts]
+  {"crd-idx/version"      1
+   "crd-idx/timestamp-ns" now
+   "crd-idx/user-id"      user-id
+   "crd-idx/contexts"     index-contexts})
+
+(defn- make-user-info-doc
+  "Builds a UserInfo document."
+  [kp now dr-cid]
+  {"user/version"         1
+   "user/timestamp-ns"    now
+   "user/user-id"         (:user-id kp)
+   "user/user-public-key" (:encoded-public-key kp)
+   "user/dr-address"      dr-cid})
+
+;; ---------------------------------------------------------------------------
+;; IO helpers
+
+(defn- add-doc!
+  "Marshals doc to JCS bytes and adds it to the IPFS store. Returns CID."
+  [server doc]
+  (ipfs/add (:ipfs server) (codec/marshal doc)))
+
+(defn- fetch-bytes
+  "Fetches raw bytes for cid from IPFS."
+  [server cid]
+  (ipfs/cat (:ipfs server) cid))
 
 ;; ---------------------------------------------------------------------------
 ;; Fetch context deps for a related user
 
-(defn- extract-deps-from-index
+(defn- fetch-deps-from-index
   "Given serialised index bytes and a target context path, fetches and returns
    [deps-map deps-cid] using fetch-fn (cid → bytes)."
   [index-bytes target-path fetch-fn]
-  (let [index (schema/unmarshal index-bytes)]
-    (when-let [entry (->> (get index "context-relations-deps-index/contexts" [])
-                          (filter #(path= (get % "context-relations-deps-index-context/context-path")
-                                          target-path))
-                          first)]
-      (let [deps-cid (get entry "context-relations-deps-index-context/context-relations-deps-content-address")]
-        (when deps-cid
-          [(schema/unmarshal (fetch-fn deps-cid)) deps-cid])))))
+  (let [deps-cid (find-deps-cid (codec/unmarshal index-bytes) target-path)]
+    (when deps-cid
+      [(codec/unmarshal (fetch-fn deps-cid)) deps-cid])))
 
 (defn- fetch-local-user-context-deps
   "Fetches context deps for a locally-homed user."
   [server related-user target-path]
-  (let [index-cid (:index-cid related-user)]
-    (when (seq index-cid)
-      (let [index-bytes (ipfs/cat (:ipfs server) index-cid)]
-        (extract-deps-from-index index-bytes target-path
-                                 #(ipfs/cat (:ipfs server) %))))))
+  (when-let [index-cid (seq (:index-cid related-user))]
+    (fetch-deps-from-index (fetch-bytes server index-cid) target-path
+                           #(fetch-bytes server %))))
 
 (defn- fetch-remote-user-context-deps
   "Fetches context deps for a user homed on a remote peer via HTTP."
   [peer-url ^bytes user-id target-path]
-  (let [hex-id  (apply str (map #(format "%02x" (bit-and % 0xFF)) user-id))
+  (let [hex-id  (util/bytes->hex user-id)
         st-resp (try (http/get (str peer-url "/status/users/" hex-id) {:as :json})
-                     (catch Exception _ nil))]
+                     (catch Exception e
+                       (println (str "batch: remote status fetch failed (" peer-url "): " (.getMessage e)))
+                       nil))]
     (when (and st-resp (= 200 (:status st-resp)))
       ;; clj-http keywordizes JSON response keys by default.
       (let [index-cid (get-in st-resp [:body :index-cid])]
         (when (seq index-cid)
-          (let [fetch-fn (fn [cid]
-                           (:body (http/get (str peer-url "/cid/" cid)
-                                            {:as :byte-array})))
-                index-bytes (fetch-fn index-cid)]
-            (extract-deps-from-index index-bytes target-path fetch-fn)))))))
+          (let [fetch-fn #(:body (http/get (str peer-url "/cid/" %) {:as :byte-array}))]
+            (fetch-deps-from-index (fetch-fn index-cid) target-path fetch-fn)))))))
 
 (defn- fetch-user-context-deps
-  "Resolves a related user's context-deps, trying local first then remote."
+  "Resolves a related user's context-deps, trying local first then remote.
+   rel-user-id may be raw bytes or a base64 string (JSON round-trip)."
   [server rel-user-id target-path]
-  (let [local-user (state/get-user server rel-user-id)]
+  (let [uid        (util/ensure-bytes rel-user-id)
+        local-user (state/get-user server uid)]
     (or (when local-user
           (fetch-local-user-context-deps server local-user target-path))
         (when-let [peer-url (some-> (:registry server)
-                                    (registry/lookup rel-user-id))]
-          (fetch-remote-user-context-deps peer-url rel-user-id target-path))
-        nil)))
+                                    (registry/lookup uid))]
+          (fetch-remote-user-context-deps peer-url uid target-path)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Transitive dep fetching
@@ -76,58 +140,42 @@
   "Fetches context-deps from directly-related users and returns
    [additional-hops source-cids]."
   [server dr context-path current-hop]
-  (let [contexts (filter #(path= (get % "direct-relations-context/context-path")
-                                 context-path)
-                         (get dr "direct-relations/contexts" []))]
+  (let [contexts (filter #(= (get % "dr-ctx/path") context-path)
+                         (get dr "dr/contexts" []))]
     (reduce
      (fn [[hops srcs] rel]
-       (when (not= (get rel "direct-relations-rel/type") "user")
-         [hops srcs])
-       (let [max-depth  (min* 10 (max 2 (get rel "direct-relations-rel-user/transitive-depth" 2)))
-             rel-user-id (get rel "direct-relations-rel-user/user-id")
-             target-path (or (seq (get rel "direct-relations-rel-user/context-path"))
-                             context-path)]
-         (if (>= current-hop max-depth)
-           [hops srcs]
-           (if-let [[related-deps deps-cid]
-                    (try (fetch-user-context-deps server rel-user-id target-path)
-                         (catch Exception _ nil))]
-             (let [new-hops
-                   (reduce
-                    (fn [acc h]
-                      (let [adjusted-hop (+ current-hop (get h "context-relations-deps-hop/hop" 1))]
-                        (if (> adjusted-hop 10)
-                          acc
-                          (conj acc (assoc h "context-relations-deps-hop/hop" adjusted-hop)))))
-                    []
-                    (get related-deps "context-relations-deps/hops" []))]
-               [(into hops new-hops)
-                (if deps-cid (conj srcs deps-cid) srcs)])
-             [hops srcs]))))
+       (if (not= (get rel "dr-rel/type") "user")
+         [hops srcs]
+         (let [max-depth   (min 10 (max 2 (get rel "dr-rel-user/transitive-depth" 2)))
+               rel-user-id (get rel "dr-rel-user/user-id")
+               target-path (or (seq (get rel "dr-rel-user/context-path")) context-path)]
+           (if (>= current-hop max-depth)
+             [hops srcs]
+             (if-let [[related-deps deps-cid]
+                      (try (fetch-user-context-deps server rel-user-id target-path)
+                           (catch Exception e
+                             (println (str "batch: dep fetch failed: " (.getMessage e)))
+                             nil))]
+               [(into hops (adjust-hops current-hop related-deps))
+                (if deps-cid (conj srcs deps-cid) srcs)]
+               [hops srcs])))))
      [[] []]
-     (mapcat #(get % "direct-relations-context/relations" []) contexts))))
+     (mapcat #(get % "dr-ctx/relations" []) contexts))))
 
 ;; ---------------------------------------------------------------------------
 ;; Compute deps for one user+context
 
 (defn- compute-deps
   [server user dr context-path]
-  (let [kp      (:key-pair user)
-        dr-cid  (:latest-dr-cid user)
-        dr-size (try (alength ^bytes (ipfs/cat (:ipfs server) dr-cid))
+  (let [dr-cid  (:latest-dr-cid user)
+        dr-size (try (alength ^bytes (fetch-bytes server dr-cid))
                      (catch Exception _ 0))
-        hop1    {"context-relations-deps-hop/hop"                              1
-                 "context-relations-deps-hop/direct-relations-addresses"       [dr-cid]
-                 "context-relations-deps-hop/direct-relations-archive-address" dr-cid
-                 "context-relations-deps-hop/size"                             dr-size}
+        hop1    (make-hop1 dr-cid dr-size)
         [extra-hops src-cids] (try (fetch-transitive-deps server dr context-path 1)
-                                   (catch Exception _ [[] []]))]
-    {"context-relations-deps/version"      1
-     "context-relations-deps/timestamp-ns" (now-ns)
-     "context-relations-deps/user-id"      (:user-id kp)
-     "context-relations-deps/context-path" context-path
-     "context-relations-deps/hops"         (into [hop1] extra-hops)
-     "context-relations-deps/source-context-relations-deps-content-addresses" src-cids}))
+                                   (catch Exception e
+                                     (println (str "batch: transitive dep fetch failed: " (.getMessage e)))
+                                     [[] []]))]
+    (make-crd (:user-id (:key-pair user)) context-path hop1 extra-hops src-cids)))
 
 ;; ---------------------------------------------------------------------------
 ;; Process one user
@@ -137,43 +185,16 @@
         dr-cid (:latest-dr-cid user)
         kp     (:key-pair user)]
     (when (and dr (seq dr-cid))
-      (let [now     (now-ns)
-            contexts (get dr "direct-relations/contexts" [])
-            index-contexts
-            (mapv (fn [ctx]
-                    (let [cpath (get ctx "direct-relations-context/context-path")
-                          deps  (compute-deps server user dr cpath)
-                          deps-bytes (schema/marshal deps)
-                          deps-cid   (ipfs/add (:ipfs server) deps-bytes)
-                          total-size (reduce + 0 (map #(get % "context-relations-deps-hop/size" 0)
-                                                      (get deps "context-relations-deps/hops" [])))
-                          max-hop    (reduce max 0 (map #(get % "context-relations-deps-hop/hop" 0)
-                                                        (get deps "context-relations-deps/hops" [])))]
-                      {"context-relations-deps-index-context/context-path"
-                       cpath
-                       "context-relations-deps-index-context/context-relations-deps-content-address"
-                       deps-cid
-                       "context-relations-deps-index-context/hops"
-                       max-hop
-                       "context-relations-deps-index-context/size"
-                       total-size}))
-                  contexts)
-            index      {"context-relations-deps-index/version"      1
-                        "context-relations-deps-index/timestamp-ns" now
-                        "context-relations-deps-index/user-id"      (:user-id kp)
-                        "context-relations-deps-index/contexts"     index-contexts}
-            index-bytes (schema/marshal index)
-            index-cid   (ipfs/add (:ipfs server) index-bytes)]
+      (let [now        (System/nanoTime)
+            index-ctxs (mapv (fn [ctx]
+                               (let [cpath    (get ctx "dr-ctx/path")
+                                     deps     (compute-deps server user dr cpath)
+                                     deps-cid (add-doc! server deps)]
+                                 (make-index-ctx-entry cpath deps deps-cid)))
+                             (get dr "dr/contexts" []))
+            index-cid  (add-doc! server (make-index-doc (:user-id kp) now index-ctxs))]
         (state/set-index-cid! server (:user-id kp) index-cid)
-        ;; Publish updated user-info to IPNS.
-        (let [ui      {"user-info/version"                           1
-                       "user-info/timestamp-ns"                      now
-                       "user-info/user-id"                           (:user-id kp)
-                       "user-info/user-public-key"                   (:encoded-public-key kp)
-                       "user-info/direct-relations-content-address"  dr-cid}
-              ui-env  (schema/wrap ui kp)
-              ui-bytes (schema/marshal ui-env)
-              ui-cid   (ipfs/add (:ipfs server) ui-bytes)]
+        (let [ui-cid (add-doc! server (schema/wrap (make-user-info-doc kp now dr-cid) kp))]
           (ipfs/publish-ipns (:ipfs server) (:ipns-key-name user) ui-cid))))))
 
 ;; ---------------------------------------------------------------------------

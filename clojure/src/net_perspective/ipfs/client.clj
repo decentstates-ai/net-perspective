@@ -2,7 +2,8 @@
   "Thin HTTP client for the kubo IPFS RPC API.
    All kubo RPC endpoints are POST requests."
   (:require [clj-http.client :as http]
-            [cheshire.core :as json]))
+            [cheshire.core :as json]
+            [net-perspective.util :as util]))
 
 ;; ---------------------------------------------------------------------------
 ;; Protocol — implemented by Client (real kubo) and MemStore (tests)
@@ -24,7 +25,7 @@
   "Creates a Client pointed at the kubo RPC API.
    addr e.g. \"localhost:5001\" or \"http://localhost:5001\"."
   [addr]
-  (let [base (if (.startsWith ^String addr "http") addr (str "http://" addr))]
+  (let [base (util/ensure-http addr)]
     (->Client (str base "/api/v0"))))
 
 (extend-type Client

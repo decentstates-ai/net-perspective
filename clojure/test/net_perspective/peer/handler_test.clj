@@ -28,26 +28,26 @@
 (defn- make-dr
   ([kp] (make-dr kp (System/nanoTime)))
   ([kp ts]
-   {"direct-relations/direct-relations-version" 1
-    "direct-relations/timestamp-ns"             ts
-    "direct-relations/user-id"                  (:user-id kp)
-    "direct-relations/contexts"
-    [{"direct-relations-context/context-path" ["food"]
-      "direct-relations-context/relations"
-      [{"direct-relations-rel/type"    "uri"
-        "direct-relations-rel-uri/uri" "https://example.com"}]}]}))
+   {"dr/version" 1
+    "dr/timestamp-ns"             ts
+    "dr/user-id"                  (:user-id kp)
+    "dr/contexts"
+    [{"dr-ctx/path" ["food"]
+      "dr-ctx/relations"
+      [{"dr-rel/type"    "uri"
+        "dr-rel-uri/uri" "https://example.com"}]}]}))
 
 (defn- make-submit-body
   ([kp] (make-submit-body kp (make-dr kp)))
   ([kp dr]
    (let [dr-env (schema/wrap dr kp)
-         ui     {"user-info/version"         1
-                 "user-info/timestamp-ns"     (get dr "direct-relations/timestamp-ns")
-                 "user-info/user-id"          (:user-id kp)
-                 "user-info/user-public-key"  (:encoded-public-key kp)}
+         ui     {"user/version"         1
+                 "user/timestamp-ns"     (get dr "dr/timestamp-ns")
+                 "user/user-id"          (:user-id kp)
+                 "user/user-public-key"  (:encoded-public-key kp)}
          ui-env (schema/wrap ui kp)]
-     {"user-info-envelope"        ui-env
-      "direct-relations-envelope" dr-env})))
+     {"user-env"        ui-env
+      "dr-env" dr-env})))
 
 (defn- post-submit [h body]
   (h (-> (mock/request :post "/submit")
@@ -100,13 +100,13 @@
         ;; DR content for kp-real but signed by kp-other.
         dr       (make-dr kp-real)
         dr-env   (schema/wrap dr kp-other)
-        ui       {"user-info/version"         1
-                  "user-info/timestamp-ns"     (get dr "direct-relations/timestamp-ns")
-                  "user-info/user-id"          (:user-id kp-real)
-                  "user-info/user-public-key"  (:encoded-public-key kp-real)}
+        ui       {"user/version"         1
+                  "user/timestamp-ns"     (get dr "dr/timestamp-ns")
+                  "user/user-id"          (:user-id kp-real)
+                  "user/user-public-key"  (:encoded-public-key kp-real)}
         ui-env   (schema/wrap ui kp-real)
-        body     {"user-info-envelope"        ui-env
-                  "direct-relations-envelope" dr-env}
+        body     {"user-env"        ui-env
+                  "dr-env" dr-env}
         h        (handler/make-handler srv)
         resp     (post-submit h body)]
     (testing "returns 400"

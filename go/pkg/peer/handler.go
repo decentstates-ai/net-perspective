@@ -11,8 +11,8 @@ import (
 
 // SubmitRequest is the body of POST /submit.
 type SubmitRequest struct {
-	UserInfoEnvelope        doc.Envelope `json:"user-info-envelope"`
-	DirectRelationsEnvelope doc.Envelope `json:"direct-relations-envelope"`
+	UserInfoEnvelope        doc.Envelope `json:"user-env"`
+	DirectRelationsEnvelope doc.Envelope `json:"dr-env"`
 }
 
 // Routes registers all HTTP handlers on mux.

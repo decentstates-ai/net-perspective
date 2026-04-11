@@ -59,8 +59,8 @@ func SubmitCmd(cfg *Config) *cobra.Command {
 			}
 
 			body, err := json.Marshal(map[string]any{
-				"user-info-envelope":        uiEnv,
-				"direct-relations-envelope": drEnv,
+				"user-env": uiEnv,
+				"dr-env":   drEnv,
 			})
 			if err != nil {
 				return err

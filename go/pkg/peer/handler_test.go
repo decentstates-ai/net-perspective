@@ -109,7 +109,7 @@ func TestSubmitWrongSignatureRejected(t *testing.T) {
 	uiEnv, _ := doc.Wrap(ui, userKP)
 
 	// Tamper with the direct-relations content after signing.
-	drEnv.Content = []byte(`{"direct-relations/direct-relations-version":99}`)
+	drEnv.Content = []byte(`{"dr/version":99}`)
 
 	body, _ := json.Marshal(peer.SubmitRequest{UserInfoEnvelope: *uiEnv, DirectRelationsEnvelope: *drEnv})
 	mux := http.NewServeMux()

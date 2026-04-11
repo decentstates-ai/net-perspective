@@ -106,10 +106,10 @@
 
 (defn- submit! [server kp dr-map]
   (let [dr-env (schema/wrap dr-map kp)
-        ui     {"user-info/version"         1
-                "user-info/timestamp-ns"     (get dr-map "direct-relations/timestamp-ns")
-                "user-info/user-id"          (:user-id kp)
-                "user-info/user-public-key"  (:encoded-public-key kp)}
+        ui     {"user/version"         1
+                "user/timestamp-ns"     (get dr-map "dr/timestamp-ns")
+                "user/user-id"          (:user-id kp)
+                "user/user-public-key"  (:encoded-public-key kp)}
         ui-env (schema/wrap ui kp)]
     ;; Call the handler directly rather than over HTTP for speed.
     (let [user-id (:user-id kp)
@@ -133,23 +133,23 @@
 
 (defn- fetch-deps [server kp context-path]
   (when-let [index (fetch-index server kp)]
-    (when-let [entry (->> (get index "context-relations-deps-index/contexts" [])
-                          (filter #(= (vec (get % "context-relations-deps-index-context/context-path"))
+    (when-let [entry (->> (get index "crd-idx/contexts" [])
+                          (filter #(= (vec (get % "crd-idx-ctx/path"))
                                       (vec context-path)))
                           first)]
-      (let [deps-cid (get entry "context-relations-deps-index-context/context-relations-deps-content-address")]
+      (let [deps-cid (get entry "crd-idx-ctx/crd-address")]
         (schema/unmarshal (ipfs/cat (:ipfs server) deps-cid))))))
 
 (defn- all-dr-cids [deps]
-  (->> (get deps "context-relations-deps/hops" [])
-       (mapcat #(get % "context-relations-deps-hop/direct-relations-addresses" []))
+  (->> (get deps "crd/hops" [])
+       (mapcat #(get % "crd-hop/dr-addresses" []))
        set))
 
 (defn- make-dr [kp & {:keys [ts] :or {ts (System/nanoTime)}}]
-  {"direct-relations/direct-relations-version" 1
-   "direct-relations/timestamp-ns"             ts
-   "direct-relations/user-id"                  (:user-id kp)
-   "direct-relations/contexts"                 []})
+  {"dr/version" 1
+   "dr/timestamp-ns"             ts
+   "dr/user-id"                  (:user-id kp)
+   "dr/contexts"                 []})
 
 ;; ---------------------------------------------------------------------------
 ;; Tests
@@ -174,25 +174,25 @@
       (try
         (submit! srv bob
                  (assoc (make-dr bob)
-                        "direct-relations/contexts"
-                        [{"direct-relations-context/context-path" ["food"]
-                          "direct-relations-context/relations"
-                          [{"direct-relations-rel/type"    "uri"
-                            "direct-relations-rel-uri/uri" "https://bob.example.com"}]}]))
+                        "dr/contexts"
+                        [{"dr-ctx/path" ["food"]
+                          "dr-ctx/relations"
+                          [{"dr-rel/type"    "uri"
+                            "dr-rel-uri/uri" "https://bob.example.com"}]}]))
         (submit! srv alice
                  (assoc (make-dr alice)
-                        "direct-relations/contexts"
-                        [{"direct-relations-context/context-path" ["food"]
-                          "direct-relations-context/relations"
-                          [{"direct-relations-rel/type"    "uri"
-                            "direct-relations-rel-uri/uri" "https://alice.example.com"}
-                           {"direct-relations-rel/type"                  "user"
-                            "direct-relations-rel-user/user-id"          (:user-id bob)
-                            "direct-relations-rel-user/transitive-depth" 2}]}]))
+                        "dr/contexts"
+                        [{"dr-ctx/path" ["food"]
+                          "dr-ctx/relations"
+                          [{"dr-rel/type"    "uri"
+                            "dr-rel-uri/uri" "https://alice.example.com"}
+                           {"dr-rel/type"                  "user"
+                            "dr-rel-user/user-id"          (:user-id bob)
+                            "dr-rel-user/transitive-depth" 2}]}]))
         (run-batch-rounds! [srv] 2)
         (let [deps (fetch-deps srv alice ["food"])]
           (testing "at least 2 hops"
-            (is (>= (count (get deps "context-relations-deps/hops" [])) 2)))
+            (is (>= (count (get deps "crd/hops" [])) 2)))
           (testing "at least 2 distinct DR CIDs"
             (is (>= (count (all-dr-cids deps)) 2))))
         (finally
@@ -208,27 +208,27 @@
       (try
         (submit! srv bob
                  (assoc (make-dr bob)
-                        "direct-relations/contexts"
-                        [{"direct-relations-context/context-path" ["food"]
-                          "direct-relations-context/relations"
-                          [{"direct-relations-rel/type"    "uri"
-                            "direct-relations-rel-uri/uri" "https://bob-food.example.com"}]}
-                         {"direct-relations-context/context-path" ["news"]
-                          "direct-relations-context/relations"
-                          [{"direct-relations-rel/type"    "uri"
-                            "direct-relations-rel-uri/uri" "https://bob-news.example.com"}]}]))
+                        "dr/contexts"
+                        [{"dr-ctx/path" ["food"]
+                          "dr-ctx/relations"
+                          [{"dr-rel/type"    "uri"
+                            "dr-rel-uri/uri" "https://bob-food.example.com"}]}
+                         {"dr-ctx/path" ["news"]
+                          "dr-ctx/relations"
+                          [{"dr-rel/type"    "uri"
+                            "dr-rel-uri/uri" "https://bob-news.example.com"}]}]))
         (submit! srv alice
                  (assoc (make-dr alice)
-                        "direct-relations/contexts"
-                        [{"direct-relations-context/context-path" ["food"]
-                          "direct-relations-context/relations"
-                          [{"direct-relations-rel/type"                  "user"
-                            "direct-relations-rel-user/user-id"          (:user-id bob)
-                            "direct-relations-rel-user/transitive-depth" 2}]}
-                         {"direct-relations-context/context-path" ["news"]
-                          "direct-relations-context/relations"
-                          [{"direct-relations-rel/type"    "uri"
-                            "direct-relations-rel-uri/uri" "https://alice-news.example.com"}]}]))
+                        "dr/contexts"
+                        [{"dr-ctx/path" ["food"]
+                          "dr-ctx/relations"
+                          [{"dr-rel/type"                  "user"
+                            "dr-rel-user/user-id"          (:user-id bob)
+                            "dr-rel-user/transitive-depth" 2}]}
+                         {"dr-ctx/path" ["news"]
+                          "dr-ctx/relations"
+                          [{"dr-rel/type"    "uri"
+                            "dr-rel-uri/uri" "https://alice-news.example.com"}]}]))
         (run-batch-rounds! [srv] 2)
         (let [bob-user   (state/get-user srv (:user-id bob))
               bob-dr-cid (:latest-dr-cid bob-user)
@@ -254,22 +254,22 @@
         ;; Each user relates to the next with depth 10.
         (doseq [i (range n)]
           (let [kp   (nth users i)
-                rels (cond-> [{"direct-relations-rel/type"    "uri"
-                               "direct-relations-rel-uri/uri" "https://node.example.com"}]
+                rels (cond-> [{"dr-rel/type"    "uri"
+                               "dr-rel-uri/uri" "https://node.example.com"}]
                        (< i (dec n))
-                       (conj {"direct-relations-rel/type"                  "user"
-                              "direct-relations-rel-user/user-id"          (:user-id (nth users (inc i)))
-                              "direct-relations-rel-user/transitive-depth" 10}))]
+                       (conj {"dr-rel/type"                  "user"
+                              "dr-rel-user/user-id"          (:user-id (nth users (inc i)))
+                              "dr-rel-user/transitive-depth" 10}))]
             (submit! srv kp
                      (assoc (make-dr kp)
-                            "direct-relations/contexts"
-                            [{"direct-relations-context/context-path" ["food"]
-                              "direct-relations-context/relations"    rels}]))))
+                            "dr/contexts"
+                            [{"dr-ctx/path" ["food"]
+                              "dr-ctx/relations"    rels}]))))
         (run-batch-rounds! [srv] 11)
         (let [deps (fetch-deps srv (first users) ["food"])]
           (testing "no hop exceeds 10"
-            (doseq [h (get deps "context-relations-deps/hops" [])]
-              (is (<= (get h "context-relations-deps-hop/hop") 10)))))
+            (doseq [h (get deps "crd/hops" [])]
+              (is (<= (get h "crd-hop/hop") 10)))))
         (finally
           (.stop ^Server (:jetty http)))))))
 
@@ -301,23 +301,23 @@
           ;; Bob publishes some food relations.
           (submit! srv-b bob
                    (assoc (make-dr bob)
-                          "direct-relations/contexts"
-                          [{"direct-relations-context/context-path" ["food"]
-                            "direct-relations-context/relations"
-                            [{"direct-relations-rel/type"    "uri"
-                              "direct-relations-rel-uri/uri" "https://bob-food.example.com"}]}]))
+                          "dr/contexts"
+                          [{"dr-ctx/path" ["food"]
+                            "dr-ctx/relations"
+                            [{"dr-rel/type"    "uri"
+                              "dr-rel-uri/uri" "https://bob-food.example.com"}]}]))
 
           ;; Alice (on peer-A) relates to Bob (on peer-B) in the food context.
           (submit! srv-a alice
                    (assoc (make-dr alice)
-                          "direct-relations/contexts"
-                          [{"direct-relations-context/context-path" ["food"]
-                            "direct-relations-context/relations"
-                            [{"direct-relations-rel/type"    "uri"
-                              "direct-relations-rel-uri/uri" "https://alice-food.example.com"}
-                             {"direct-relations-rel/type"                  "user"
-                              "direct-relations-rel-user/user-id"          (:user-id bob)
-                              "direct-relations-rel-user/transitive-depth" 2}]}]))
+                          "dr/contexts"
+                          [{"dr-ctx/path" ["food"]
+                            "dr-ctx/relations"
+                            [{"dr-rel/type"    "uri"
+                              "dr-rel-uri/uri" "https://alice-food.example.com"}
+                             {"dr-rel/type"                  "user"
+                              "dr-rel-user/user-id"          (:user-id bob)
+                              "dr-rel-user/transitive-depth" 2}]}]))
 
           ;; Run batch on both peers so peer-A can compute Alice's deps
           ;; by fetching Bob's index from peer-B over HTTP.
@@ -328,7 +328,7 @@
                 bob-user  (state/get-user srv-b (:user-id bob))
                 bob-dr-cid (:latest-dr-cid bob-user)]
             (testing "deps has at least 2 hops (Alice's own + Bob's)"
-              (is (>= (count (get deps "context-relations-deps/hops" [])) 2)))
+              (is (>= (count (get deps "crd/hops" [])) 2)))
             (testing "Bob's DR CID appears in Alice's cross-peer deps"
               (is (contains? all-cids bob-dr-cid)))))
         (finally
@@ -352,29 +352,29 @@
           ;; Bob has both food and news relations.
           (submit! srv-b bob
                    (assoc (make-dr bob)
-                          "direct-relations/contexts"
-                          [{"direct-relations-context/context-path" ["food"]
-                            "direct-relations-context/relations"
-                            [{"direct-relations-rel/type"    "uri"
-                              "direct-relations-rel-uri/uri" "https://bob-food.example.com"}]}
-                           {"direct-relations-context/context-path" ["news"]
-                            "direct-relations-context/relations"
-                            [{"direct-relations-rel/type"    "uri"
-                              "direct-relations-rel-uri/uri" "https://bob-news.example.com"}]}]))
+                          "dr/contexts"
+                          [{"dr-ctx/path" ["food"]
+                            "dr-ctx/relations"
+                            [{"dr-rel/type"    "uri"
+                              "dr-rel-uri/uri" "https://bob-food.example.com"}]}
+                           {"dr-ctx/path" ["news"]
+                            "dr-ctx/relations"
+                            [{"dr-rel/type"    "uri"
+                              "dr-rel-uri/uri" "https://bob-news.example.com"}]}]))
 
           ;; Alice follows Bob only in food.
           (submit! srv-a alice
                    (assoc (make-dr alice)
-                          "direct-relations/contexts"
-                          [{"direct-relations-context/context-path" ["food"]
-                            "direct-relations-context/relations"
-                            [{"direct-relations-rel/type"                  "user"
-                              "direct-relations-rel-user/user-id"          (:user-id bob)
-                              "direct-relations-rel-user/transitive-depth" 2}]}
-                           {"direct-relations-context/context-path" ["news"]
-                            "direct-relations-context/relations"
-                            [{"direct-relations-rel/type"    "uri"
-                              "direct-relations-rel-uri/uri" "https://alice-news.example.com"}]}]))
+                          "dr/contexts"
+                          [{"dr-ctx/path" ["food"]
+                            "dr-ctx/relations"
+                            [{"dr-rel/type"                  "user"
+                              "dr-rel-user/user-id"          (:user-id bob)
+                              "dr-rel-user/transitive-depth" 2}]}
+                           {"dr-ctx/path" ["news"]
+                            "dr-ctx/relations"
+                            [{"dr-rel/type"    "uri"
+                              "dr-rel-uri/uri" "https://alice-news.example.com"}]}]))
 
           (run-batch-rounds! [srv-a srv-b] 2)
 

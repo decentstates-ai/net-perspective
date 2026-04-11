@@ -10,14 +10,14 @@
 (defn- make-kp [] (crypto/generate-key-pair))
 
 (defn- sample-dr [kp]
-  {"direct-relations/direct-relations-version" 1
-   "direct-relations/timestamp-ns"             (System/nanoTime)
-   "direct-relations/user-id"                  (:user-id kp)
-   "direct-relations/contexts"
-   [{"direct-relations-context/context-path" ["food"]
-     "direct-relations-context/relations"
-     [{"direct-relations-rel/type"        "uri"
-       "direct-relations-rel-uri/uri"     "https://example.com/recipe"}]}]})
+  {"dr/version" 1
+   "dr/timestamp-ns"             (System/nanoTime)
+   "dr/user-id"                  (:user-id kp)
+   "dr/contexts"
+   [{"dr-ctx/path" ["food"]
+     "dr-ctx/relations"
+     [{"dr-rel/type"        "uri"
+       "dr-rel-uri/uri"     "https://example.com/recipe"}]}]})
 
 ;; ---------------------------------------------------------------------------
 ;; Marshal / unmarshal
@@ -30,9 +30,9 @@
     (testing "unmarshal returns a map"
       (is (map? out)))
     (testing "version survives roundtrip"
-      (is (= 1 (get out "direct-relations/direct-relations-version"))))
+      (is (= 1 (get out "dr/version"))))
     (testing "byte array becomes base64 string"
-      (is (string? (get out "direct-relations/user-id"))))))
+      (is (string? (get out "dr/user-id"))))))
 
 (deftest test-marshal-is-canonical
   (let [kp  (make-kp)
@@ -51,10 +51,10 @@
         env     (schema/wrap content kp)
         decoded (schema/unwrap env)]
     (testing "unwrapped content matches original fields"
-      (is (= 1 (get decoded "direct-relations/direct-relations-version")))
+      (is (= 1 (get decoded "dr/version")))
       (is (= ["food"]
-             (get-in decoded ["direct-relations/contexts" 0
-                              "direct-relations-context/context-path"]))))))
+             (get-in decoded ["dr/contexts" 0
+                              "dr-ctx/path"]))))))
 
 (deftest test-unwrap-rejects-wrong-key
   (let [kp1     (make-kp)
@@ -63,8 +63,8 @@
         env     (schema/wrap content kp1)
         ;; splice in kp2's public key — user-id will mismatch
         bad-env (assoc env
-                       "envelope/user-public-key" (:encoded-public-key kp2)
-                       "envelope/user-id"         (:user-id kp2))]
+                       "env/user-public-key" (:encoded-public-key kp2)
+                       "env/user-id"         (:user-id kp2))]
     (testing "signature check fails for wrong key"
       (is (thrown? Exception (schema/unwrap bad-env))))))
 
@@ -72,8 +72,8 @@
   (let [kp      (make-kp)
         content (sample-dr kp)
         env     (schema/wrap content kp)
-        tampered (update env "envelope/content"
-                         assoc "direct-relations/direct-relations-version" 99)]
+        tampered (update env "env/content"
+                         assoc "dr/version" 99)]
     (testing "signature check fails after content modification"
       (is (thrown? Exception (schema/unwrap tampered))))))
 
@@ -83,7 +83,7 @@
         content (sample-dr kp1)
         env     (schema/wrap content kp1)
         ;; keep kp1's signature but swap in kp2's user-id
-        bad-env (assoc env "envelope/user-id" (:user-id kp2))]
+        bad-env (assoc env "env/user-id" (:user-id kp2))]
     (testing "user-id mismatch with public key is rejected"
       (is (thrown? Exception (schema/unwrap bad-env))))))
 

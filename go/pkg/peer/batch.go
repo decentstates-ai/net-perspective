@@ -104,7 +104,7 @@ func (s *Server) processUser(ctx context.Context, u *HomedUser) error {
 		TimestampNs:                   now,
 		UserID:                        u.KeyPair.UserID,
 		UserPublicKey:                 u.KeyPair.EncodedPublicKey,
-		DirectRelationsContentAddress: drCID,
+		DRAddress: drCID,
 	}
 	// Preserve peer fields if already set.
 	if prev := u.latestUserInfo; prev != nil {
