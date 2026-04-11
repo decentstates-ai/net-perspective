@@ -129,7 +129,7 @@
 (defn- fetch-local-user-context-deps
   "Fetches context deps for a locally-homed user."
   [server related-user target-path]
-  (when-let [index-cid (seq (:index-cid related-user))]
+  (when-let [index-cid (not-empty (:index-cid related-user))]
     (fetch-deps-from-index (fetch-bytes server index-cid) target-path
                            #(fetch-bytes server %))))
 (m/=> fetch-local-user-context-deps
