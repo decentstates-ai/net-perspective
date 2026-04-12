@@ -93,7 +93,7 @@
      :base-url (str "http://localhost:" port)
      :port     port}))
 
-(defn- add-user! [ipfs-client server reg base-url]
+(defn- add-user! [ipfs-client server]
   (let [kp       (crypto/generate-key-pair)
         key-name (str "user-" (schema/b64-encode (:user-id kp)))
         ipns-addr (ipfs/key-gen ipfs-client key-name)]
@@ -103,7 +103,6 @@
                                     :latest-dr     nil
                                     :latest-dr-cid ""
                                     :index-cid     ""})
-    (registry/register! reg (:user-id kp) base-url)
     kp))
 
 (defn- submit! [server kp dr-map]
@@ -126,6 +125,28 @@
   (dotimes [_ n]
     (doseq [srv servers]
       (batch/run-batch! srv))))
+
+(defn- sync-index-cids!
+  "Copies each server's homed users' index-cids into the other servers' registries.
+   This simulates the cross-peer index-cid discovery that would happen via gossip."
+  [server-reg-pairs]
+  (let [all-entries (for [[srv _] server-reg-pairs
+                          user    (state/all-users srv)
+                          :let    [uid (:user-id (:key-pair user))
+                                   ic  (:index-cid user)]
+                          :when   (seq ic)]
+                      [uid ic])]
+    (doseq [[_ reg] server-reg-pairs
+            [uid ic] all-entries]
+      (registry/register! reg uid ic))))
+
+(defn- run-batch-rounds-cross!
+  "Runs batch rounds across multiple servers, syncing index-cids between rounds."
+  [server-reg-pairs n]
+  (dotimes [_ n]
+    (doseq [[srv _] server-reg-pairs]
+      (batch/run-batch! srv))
+    (sync-index-cids! server-reg-pairs)))
 
 (defn- fetch-index [server kp]
   (let [user    (state/get-user server (:user-id kp))
@@ -171,8 +192,8 @@
     (let [reg    (registry/new-registry)
           srv    (new-peer-server ipfs-client reg)
           http   (start-http srv)
-          alice  (add-user! ipfs-client srv reg (:base-url http))
-          bob    (add-user! ipfs-client srv reg (:base-url http))]
+          alice  (add-user! ipfs-client srv)
+          bob    (add-user! ipfs-client srv)]
       (try
         (submit! srv bob
                  (assoc (make-dr bob)
@@ -205,8 +226,8 @@
     (let [reg   (registry/new-registry)
           srv   (new-peer-server ipfs-client reg)
           http  (start-http srv)
-          alice (add-user! ipfs-client srv reg (:base-url http))
-          bob   (add-user! ipfs-client srv reg (:base-url http))]
+          alice (add-user! ipfs-client srv)
+          bob   (add-user! ipfs-client srv)]
       (try
         (submit! srv bob
                  (assoc (make-dr bob)
@@ -251,7 +272,7 @@
           srv   (new-peer-server ipfs-client reg)
           http  (start-http srv)
           n     12
-          users (mapv (fn [_] (add-user! ipfs-client srv reg (:base-url http))) (range n))]
+          users (mapv (fn [_] (add-user! ipfs-client srv)) (range n))]
       (try
         ;; Each user relates to the next with depth 10.
         (doseq [i (range n)]
@@ -277,14 +298,11 @@
 
 ;; ---------------------------------------------------------------------------
 ;; Multi-peer tests: two peer servers with a shared IPFS node but separate
-;; user namespaces. Each peer knows about the other via registry lookup,
-;; so batch computation can fetch context-deps across peer boundaries.
+;; user namespaces. Each peer discovers the other's index-cids via registry,
+;; so batch computation can resolve context-deps across peer boundaries.
 
 (deftest test-two-peer-cross-fetch
   (with-ipfs [ipfs-client]
-    ;; Both peers share the same IPFS node (offline daemon) — in production
-    ;; each would have its own, but IPFS content addressing means CIDs are
-    ;; globally addressable.
     (let [reg-a  (registry/new-registry)
           reg-b  (registry/new-registry)
           srv-a  (new-peer-server ipfs-client reg-a)
@@ -292,13 +310,8 @@
           http-a (start-http srv-a)
           http-b (start-http srv-b)]
       (try
-        ;; Alice is homed on peer-A, Bob on peer-B.
-        ;; Each registry knows about both peers so batch can cross-fetch.
-        (let [alice (add-user! ipfs-client srv-a reg-a (:base-url http-a))
-              bob   (add-user! ipfs-client srv-b reg-b (:base-url http-b))]
-          ;; Both registries need to know both users so cross-peer lookup works.
-          (registry/register! reg-a (:user-id bob)   (:base-url http-b))
-          (registry/register! reg-b (:user-id alice) (:base-url http-a))
+        (let [alice (add-user! ipfs-client srv-a)
+              bob   (add-user! ipfs-client srv-b)]
 
           ;; Bob publishes some food relations.
           (submit! srv-b bob
@@ -321,9 +334,9 @@
                               "dr-rel-user/user-id"          (:user-id bob)
                               "dr-rel-user/transitive-depth" 2}]}]))
 
-          ;; Run batch on both peers so peer-A can compute Alice's deps
-          ;; by fetching Bob's index from peer-B over HTTP.
-          (run-batch-rounds! [srv-a srv-b] 2)
+          ;; Run batch on both peers, syncing index-cids between rounds
+          ;; so peer-A can resolve Bob's index via the registry.
+          (run-batch-rounds-cross! [[srv-a reg-a] [srv-b reg-b]] 2)
 
           (let [deps      (fetch-deps srv-a alice ["food"])
                 all-cids  (all-dr-cids deps)
@@ -346,10 +359,8 @@
           http-a (start-http srv-a)
           http-b (start-http srv-b)]
       (try
-        (let [alice (add-user! ipfs-client srv-a reg-a (:base-url http-a))
-              bob   (add-user! ipfs-client srv-b reg-b (:base-url http-b))]
-          (registry/register! reg-a (:user-id bob)   (:base-url http-b))
-          (registry/register! reg-b (:user-id alice) (:base-url http-a))
+        (let [alice (add-user! ipfs-client srv-a)
+              bob   (add-user! ipfs-client srv-b)]
 
           ;; Bob has both food and news relations.
           (submit! srv-b bob
@@ -378,7 +389,7 @@
                             [{"dr-rel/type"    "uri"
                               "dr-rel-uri/uri" "https://alice-news.example.com"}]}]))
 
-          (run-batch-rounds! [srv-a srv-b] 2)
+          (run-batch-rounds-cross! [[srv-a reg-a] [srv-b reg-b]] 2)
 
           (let [bob-user   (state/get-user srv-b (:user-id bob))
                 bob-dr-cid (:latest-dr-cid bob-user)
@@ -393,4 +404,3 @@
         (finally
           (.stop ^Server (:jetty http-a))
           (.stop ^Server (:jetty http-b)))))))
-

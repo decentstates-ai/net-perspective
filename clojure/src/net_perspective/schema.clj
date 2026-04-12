@@ -114,17 +114,20 @@
 ;; Primitive type aliases — bytes types
 
 (def UserId
-  "34-byte SHA2-256 multihash of the encoded public key."
-  [:and bytes? [:fn {:error/message "must be 34-byte SHA2-256 multihash"}
-                #(= 34 (alength ^bytes %))]])
+  "34-byte SHA2-256 multihash (bytes or base64 after JSON round-trip)."
+  [:or
+   [:and bytes? [:fn {:error/message "must be 34-byte SHA2-256 multihash"}
+                 #(= 34 (alength ^bytes %))]]
+   [:and [:re base64-re] [:fn {:error/message "must encode 34 bytes"}
+                          #(= 34 (count (b64-decode %)))]]])
 
 (def EncodedPublicKey
-  "Multicodec-prefixed (varint 0x1203) ML-DSA-44 public key bytes."
-  bytes?)
+  "Multicodec-prefixed (varint 0x1203) ML-DSA-44 public key (bytes or base64)."
+  [:or bytes? [:re base64-re]])
 
 (def Signature
-  "ML-DSA-44 (Dilithium2) signature bytes."
-  bytes?)
+  "ML-DSA-44 (Dilithium2) signature (bytes or base64)."
+  [:or bytes? [:re base64-re]])
 
 (def Seed
   "32-byte ML-DSA-44 private key seed."
@@ -265,7 +268,7 @@
   "Internal registry record (net-perspective.peer.registry/Registry)."
   (m/schema
    [:map
-    [:state :any]]))                     ; atom: {b64-id → peer-url}
+    [:state :any]]))                     ; atom: {b64-id → index-cid}
 
 (def ServerState
   "Shape of the map held inside a PeerServer's state atom."
