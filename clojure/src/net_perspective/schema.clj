@@ -258,8 +258,8 @@
     [:ipns-key-name KeyName]
     [:ipns-address  IpnsAddress]
     [:latest-dr     [:maybe :map]]       ; DirectRelations; byte fields may be base64 strings after JSON round-trip
-    [:latest-dr-cid [:maybe Cid]]
-    [:index-cid     [:maybe Cid]]]))
+    [:latest-dr-cid [:maybe [:or [:= ""] Cid]]]
+    [:index-cid     [:maybe [:or [:= ""] Cid]]]]))
 
 (def Registry
   "Internal registry record (net-perspective.peer.registry/Registry)."
