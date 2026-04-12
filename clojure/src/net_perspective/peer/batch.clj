@@ -10,6 +10,22 @@
            [java.util.zip ZipOutputStream ZipEntry]))
 
 ;; ---------------------------------------------------------------------------
+;; Document IO — validate on the way in and out
+
+(defn- fetch-document!
+  "Fetches CID from IPFS and unmarshals to a map. schema-var documents the
+   expected return type; validation is not performed on fetch because byte
+   fields become base64 strings after the JSON round-trip."
+  [server cid _schema-var]
+  (schema/unmarshal-document (ipfs/cat (:ipfs server) cid)))
+
+(defn- store-document!
+  "Validates document against schema-var, marshals to JCS, stores in IPFS. Returns CID."
+  [server document schema-var]
+  (schema/validate! @schema-var document)
+  (ipfs/add (:ipfs server) (schema/marshal-document document)))
+
+;; ---------------------------------------------------------------------------
 ;; Pure helpers (adjust-hops, make-crd, find-deps-cid are tested directly)
 
 (defn- adjust-hops
@@ -38,10 +54,7 @@
         (get index "crd-idx/contexts" [])))
 
 ;; ---------------------------------------------------------------------------
-;; IO helpers
-
-(defn- add-document! [server document]
-  (ipfs/add (:ipfs server) (schema/marshal-document document)))
+;; ZIP helper
 
 (defn- zip-archive ^bytes [entries]
   (let [baos (ByteArrayOutputStream.)]
@@ -55,33 +68,39 @@
 ;; ---------------------------------------------------------------------------
 ;; Fetch context deps for a related user
 
-(defn- fetch-deps-via-index
-  "Given a fetch-bytes fn and an index CID, resolves deps for target-path.
-   Returns [deps-map deps-cid] or nil."
-  [fetch-bytes index-cid target-path]
-  (when-let [ic (not-empty index-cid)]
-    (when-let [dc (find-deps-cid (schema/unmarshal-document (fetch-bytes ic)) target-path)]
-      [(schema/unmarshal-document (fetch-bytes dc)) dc])))
+(defn- fetch-user-deps-local
+  "Tries to resolve deps for a locally-homed user. Returns [deps-map deps-cid] or nil."
+  [server uid target-path]
+  (when-let [user (state/get-user server uid)]
+    (when-let [ic (not-empty (:index-cid user))]
+      (let [index (fetch-document! server ic #'schema/ContextRelationsDepsIndex)]
+        (when-let [dc (find-deps-cid index target-path)]
+          [(fetch-document! server dc #'schema/ContextRelationsDeps) dc])))))
+
+(defn- fetch-user-deps-remote
+  "Tries to resolve deps via a remote peer. Returns [deps-map deps-cid] or nil."
+  [server uid target-path]
+  (when-let [peer-url (some-> (:registry server) (registry/lookup uid))]
+    (try
+      (let [resp (http/get (str peer-url "/status/users/" (schema/bytes->hex uid)) {:as :json})]
+        (when (= 200 (:status resp))
+          (when-let [ic (not-empty (get-in resp [:body :index-cid]))]
+            (let [fetch  #(schema/unmarshal-document
+                           (:body (http/get (str peer-url "/cid/" %) {:as :byte-array})))
+                  index  (fetch ic)]
+              (when-let [dc (find-deps-cid index target-path)]
+                [(fetch dc) dc])))))
+      (catch Exception e
+        (println (str "batch: remote fetch failed (" peer-url "): " (.getMessage e)))
+        nil))))
 
 (defn- fetch-user-deps
   "Returns [deps-map deps-cid] for a related user's context, or nil.
    Tries local state first, then remote peer via HTTP."
   [server rel-user-id target-path]
   (let [uid (schema/ensure-bytes rel-user-id)]
-    (or
-     (when-let [user (state/get-user server uid)]
-       (fetch-deps-via-index #(ipfs/cat (:ipfs server) %) (:index-cid user) target-path))
-     (when-let [peer-url (some-> (:registry server) (registry/lookup uid))]
-       (try
-         (let [resp (http/get (str peer-url "/status/users/" (schema/bytes->hex uid)) {:as :json})]
-           (when (= 200 (:status resp))
-             (fetch-deps-via-index
-              #(:body (http/get (str peer-url "/cid/" %) {:as :byte-array}))
-              (get-in resp [:body :index-cid])
-              target-path)))
-         (catch Exception e
-           (println (str "batch: remote fetch failed (" peer-url "): " (.getMessage e)))
-           nil))))))
+    (or (fetch-user-deps-local server uid target-path)
+        (fetch-user-deps-remote server uid target-path))))
 
 ;; ---------------------------------------------------------------------------
 ;; Transitive dep collection
@@ -136,23 +155,24 @@
             idx-ctxs  (mapv (fn [ctx]
                               (let [cpath    (get ctx "dr-ctx/path")
                                     deps     (compute-context-deps server user cpath now)
-                                    deps-cid (add-document! server deps)
+                                    deps-cid (store-document! server deps #'schema/ContextRelationsDeps)
                                     dep-hops (get deps "crd/hops" [])]
                                 {"crd-idx-ctx/path"        cpath
                                  "crd-idx-ctx/crd-address" deps-cid
                                  "crd-idx-ctx/hops"        (reduce max 0 (map #(get % "crd-hop/hop" 0) dep-hops))
                                  "crd-idx-ctx/size"        (reduce + 0 (map #(get % "crd-hop/size" 0) dep-hops))}))
                             (get dr "dr/contexts" []))
-            index-cid (add-document! server {"crd-idx/version"      1
-                                             "crd-idx/timestamp-ns" now
-                                             "crd-idx/user-id"      uid
-                                             "crd-idx/contexts"     idx-ctxs})
+            index     {"crd-idx/version"      1
+                       "crd-idx/timestamp-ns" now
+                       "crd-idx/user-id"      uid
+                       "crd-idx/contexts"     idx-ctxs}
+            index-cid (store-document! server index #'schema/ContextRelationsDepsIndex)
             user-info {"user/version"         1
                        "user/timestamp-ns"    now
                        "user/user-id"         uid
                        "user/user-public-key" (:encoded-public-key kp)
                        "user/dr-address"      dr-cid}
-            ui-cid    (add-document! server (schema/wrap-envelope user-info kp))]
+            ui-cid    (store-document! server (schema/wrap-envelope user-info kp) #'schema/Envelope)]
         (state/set-index-cid! server uid index-cid)
         (ipfs/publish-ipns (:ipfs server) (:ipns-key-name user) ui-cid)))))
 
