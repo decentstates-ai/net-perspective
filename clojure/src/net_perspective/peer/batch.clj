@@ -15,12 +15,14 @@
   "Validates document against schema-var, marshals to JCS, stores in IPFS. Returns CID."
   [server document schema-var]
   (schema/validate! @schema-var document)
-  (ipfs/add (:ipfs server) (schema/marshal-document document)))
+  (let [store (:ipfs server)]
+    (ipfs/add store (schema/marshal-document document))))
 
 (defn- fetch-document!
   "Fetches CID from IPFS, unmarshals, validates against schema-var."
   [server cid schema-var]
-  (schema/validate! @schema-var (schema/unmarshal-document (ipfs/cat (:ipfs server) cid))))
+  (let [store (:ipfs server)]
+    (schema/validate! @schema-var (schema/unmarshal-document (ipfs/cat store cid)))))
 
 ;; ---------------------------------------------------------------------------
 ;; CID resolution (state lookups, no IPFS IO)
@@ -109,8 +111,9 @@
   (let [dr     (:latest-dr user)
         dr-cid (:latest-dr-cid user)]
     (when (and dr (seq dr-cid))
-      (let [dr-bytes (ipfs/cat (:ipfs server) dr-cid)
-            arch-cid (ipfs/add (:ipfs server) (zip-archive [[dr-cid dr-bytes]]))]
+      (let [store    (:ipfs server)
+            dr-bytes (ipfs/cat store dr-cid)
+            arch-cid (ipfs/add store (zip-archive [[dr-cid dr-bytes]]))]
         {:dr-bytes     dr-bytes
          :arch-cid     arch-cid
          :context-deps (into {}
@@ -120,10 +123,16 @@
                              (get dr "dr/contexts" []))}))))
 
 ;; ---------------------------------------------------------------------------
-;; Build — pure document creation from fetched data
+;; Build — document creation from fetched data, CIDs computed from content
+
+(defn- document-cid
+  "Validates, marshals to JCS, and computes the CID without storing."
+  [server document schema-var]
+  (schema/validate! @schema-var document)
+  (ipfs/compute-cid (:ipfs server) (schema/marshal-document document)))
 
 (defn- build-context-crd
-  "Builds a CRD document for one context from fetched data. Pure."
+  "Builds a CRD document for one context from fetched data."
   [uid now dr-cid arch-cid dr-size related-deps context-path]
   (let [hop1       {"crd-hop/hop"             1
                     "crd-hop/dr-addresses"    [dr-cid]
@@ -133,19 +142,11 @@
         src-cids   (mapv :deps-cid related-deps)]
     (make-crd uid now context-path (into [hop1] extra-hops) src-cids)))
 
-(defn- build-index-ctx-entry
-  "Builds one index context entry from a CRD document and its CID. Pure."
-  [cpath crd crd-cid]
-  (let [dep-hops (get crd "crd/hops" [])]
-    {"crd-idx-ctx/path"        cpath
-     "crd-idx-ctx/crd-address" crd-cid
-     "crd-idx-ctx/hops"        (reduce max 0 (map #(get % "crd-hop/hop" 0) dep-hops))
-     "crd-idx-ctx/size"        (reduce + 0 (map #(get % "crd-hop/size" 0) dep-hops))}))
-
 (defn- build-documents
-  "Builds all documents for one user from fetched data. Pure.
-   Returns {:crds [{:cpath :crd :idx-entry}], :index doc, :envelope doc}."
-  [user fetched-data now]
+  "Builds all documents for one user from fetched data.
+   Computes CIDs from content so the index and envelope are complete.
+   Returns {:crds [{:crd :crd-cid}], :index, :envelope}."
+  [server user fetched-data now]
   (let [dr      (:latest-dr user)
         dr-cid  (:latest-dr-cid user)
         kp      (:key-pair user)
@@ -153,51 +154,55 @@
         dr-size (alength ^bytes (:dr-bytes fetched-data))
 
         crds (mapv (fn [ctx]
-                     (let [cpath (get ctx "dr-ctx/path")
+                     (let [cpath   (get ctx "dr-ctx/path")
                            related (get (:context-deps fetched-data) cpath [])
-                           crd   (build-context-crd uid now dr-cid (:arch-cid fetched-data)
-                                                    dr-size related cpath)]
-                       {:cpath cpath :crd crd}))
+                           crd     (build-context-crd uid now dr-cid (:arch-cid fetched-data)
+                                                      dr-size related cpath)
+                           crd-cid (document-cid server crd #'schema/ContextRelationsDeps)
+                           dep-hops (get crd "crd/hops" [])]
+                       {:crd     crd
+                        :crd-cid crd-cid
+                        :idx-ctx {"crd-idx-ctx/path"        cpath
+                                  "crd-idx-ctx/crd-address" crd-cid
+                                  "crd-idx-ctx/hops"        (reduce max 0 (map #(get % "crd-hop/hop" 0) dep-hops))
+                                  "crd-idx-ctx/size"        (reduce + 0 (map #(get % "crd-hop/size" 0) dep-hops))}}))
                    (get dr "dr/contexts" []))
 
-        ;; index and envelope need CRD CIDs, which aren't known until store.
-        ;; Return the documents; store-user-documents! will wire up the CIDs.
+        index     {"crd-idx/version"      1
+                   "crd-idx/timestamp-ns" now
+                   "crd-idx/user-id"      uid
+                   "crd-idx/contexts"     (mapv :idx-ctx crds)}
+
         user-info {"user/version"         1
                    "user/timestamp-ns"    now
                    "user/user-id"         uid
                    "user/user-public-key" (:encoded-public-key kp)
-                   "user/dr-address"      dr-cid}]
-    {:crds      crds
-     :uid       uid
-     :now       now
-     :user-info user-info
-     :kp        kp}))
+                   "user/dr-address"      dr-cid}
+        envelope  (schema/wrap-envelope user-info kp)]
+    {:crds     crds
+     :index    index
+     :envelope envelope}))
 
 ;; ---------------------------------------------------------------------------
 ;; Store — persist built documents to IPFS and update state
 
 (defn- store-user-documents!
-  "Stores all built documents for one user. Returns {:index-cid :ui-cid}."
-  [server user {:keys [crds uid now user-info kp]}]
-  (let [idx-ctxs (mapv (fn [{:keys [cpath crd]}]
-                          (let [crd-cid (store-document! server crd #'schema/ContextRelationsDeps)]
-                            (build-index-ctx-entry cpath crd crd-cid)))
-                        crds)
-        index     {"crd-idx/version"      1
-                   "crd-idx/timestamp-ns" now
-                   "crd-idx/user-id"      uid
-                   "crd-idx/contexts"     idx-ctxs}
-        index-cid (store-document! server index #'schema/ContextRelationsDepsIndex)
-        ui-cid    (store-document! server (schema/wrap-envelope user-info kp) #'schema/Envelope)]
-    (state/set-index-cid! server uid index-cid)
+  "Stores all pre-built documents for one user to IPFS, updates state, publishes IPNS."
+  [server user {:keys [crds index envelope]}]
+  (doseq [{:keys [crd]} crds]
+    (store-document! server crd #'schema/ContextRelationsDeps))
+  (let [index-cid (store-document! server index #'schema/ContextRelationsDepsIndex)
+        ui-cid    (store-document! server envelope #'schema/Envelope)]
+    (state/set-index-cid! server (:user-id (:key-pair user)) index-cid)
     (ipfs/publish-ipns (:ipfs server) (:ipns-key-name user) ui-cid)))
+
 
 ;; ---------------------------------------------------------------------------
 ;; Orchestration
 
 (defn- process-user! [server user]
   (when-let [fetched (fetch-user-data server user)]
-    (let [docs (build-documents user fetched (System/nanoTime))]
+    (let [docs (build-documents server user fetched (System/nanoTime))]
       (store-user-documents! server user docs))))
 
 ;; ---------------------------------------------------------------------------

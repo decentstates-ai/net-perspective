@@ -12,6 +12,7 @@
 
 (defprotocol Store
   (add          [store data]         "Store bytes; returns CID string.")
+  (compute-cid  [store data]         "Returns the CID for data without storing it.")
   (cat          [store cid]          "Fetch bytes for a CID.")
   (publish-ipns [store key-name cid] "Publish CID under IPNS key-name.")
   (resolve-ipns [store ipns-addr]    "Resolve IPNS address to CID.")
@@ -19,6 +20,7 @@
   (ping         [store]              "Returns true if daemon reachable."))
 
 (m/=> add          [:=> [:cat :any #'schema/ContentBytes] #'schema/Cid])
+(m/=> compute-cid  [:=> [:cat :any #'schema/ContentBytes] #'schema/Cid])
 (m/=> cat          [:=> [:cat :any #'schema/Cid] #'schema/ContentBytes])
 (m/=> publish-ipns [:=> [:cat :any #'schema/KeyName #'schema/Cid] :nil])
 (m/=> resolve-ipns [:=> [:cat :any #'schema/IpnsAddress] #'schema/Cid])
@@ -50,6 +52,16 @@
                            :multipart [{:name      "file"
                                         :content   data
                                         :mime-type "application/octet-stream"}]
+                           :as        :json})]
+      (get-in resp [:body :Hash])))
+
+  (compute-cid [client data]
+    (let [resp (http/post (str (:base-url client) "/add")
+                          {:connection-manager (:conn-mgr client)
+                           :multipart [{:name      "file"
+                                        :content   data
+                                        :mime-type "application/octet-stream"}]
+                           :query-params {"only-hash" "true"}
                            :as        :json})]
       (get-in resp [:body :Hash])))
 
@@ -105,20 +117,29 @@
 ;; ---------------------------------------------------------------------------
 ;; In-memory store for unit tests
 
-(defrecord MemStore [data ipns counter])
+(defn- sha256-hex
+  "SHA-256 hash of data as a hex string."
+  ^String [^bytes data]
+  (let [md (java.security.MessageDigest/getInstance "SHA-256")]
+    (schema/bytes->hex (.digest md data))))
+
+(defrecord MemStore [data ipns])
 
 (defn new-mem-store
   "Creates a closeable in-memory Store for testing. No teardown needed."
   []
-  (util/closeable (->MemStore (atom {}) (atom {}) (atom 0))))
+  (util/closeable (->MemStore (atom {}) (atom {}))))
 (m/=> new-mem-store [:=> [:cat] :any])
 
 (extend-type MemStore
   Store
   (add [store data]
-    (let [cid (format "bafytest%016d" (swap! (:counter store) inc))]
+    (let [cid (sha256-hex data)]
       (swap! (:data store) assoc cid data)
       cid))
+
+  (compute-cid [_store data]
+    (sha256-hex data))
 
   (cat [store cid]
     (or (get @(:data store) cid)
